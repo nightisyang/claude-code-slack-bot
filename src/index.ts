@@ -29,7 +29,7 @@ async function start() {
     // Initialize MCP manager
     const mcpManager = new McpManager();
     const mcpConfig = mcpManager.loadConfiguration();
-    
+
     // Initialize handlers
     const claudeHandler = new ClaudeHandler(mcpManager);
     const slackHandler = new SlackHandler(app, claudeHandler, mcpManager);
@@ -44,7 +44,7 @@ async function start() {
       usingBedrock: config.claude.useBedrock,
       usingVertex: config.claude.useVertex,
       usingAnthropicAPI: !config.claude.useBedrock && !config.claude.useVertex,
-      debugMode: config.debug,
+      debugMode: true,
       baseDirectory: config.baseDirectory || 'not set',
       mcpServers: mcpConfig ? Object.keys(mcpConfig.mcpServers).length : 0,
       mcpServerNames: mcpConfig ? Object.keys(mcpConfig.mcpServers) : [],

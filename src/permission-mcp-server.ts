@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+// IMMEDIATE DEBUG LOGGING - SHOULD ALWAYS SHOW
+console.error('=== MCP SERVER FILE LOADING ===');
+console.error(`Process ID: ${process.pid}`);
+console.error(`Working Directory: ${process.cwd()}`);
+console.error(`Node Version: ${process.version}`);
+console.error(`Arguments: ${JSON.stringify(process.argv)}`);
+console.error(`Environment: SLACK_BOT_TOKEN=${!!process.env.SLACK_BOT_TOKEN}, SLACK_CONTEXT=${!!process.env.SLACK_CONTEXT}`);
+console.error(`Parent PID: ${process.ppid || 'unknown'}`);
+console.error(`Stdio is TTY: stdin=${process.stdin.isTTY}, stdout=${process.stdout.isTTY}, stderr=${process.stderr.isTTY}`);
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -8,6 +18,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { WebClient } from '@slack/web-api';
 import { Logger } from './logger.js';
+import * as fs from 'fs';
+import * as path from 'path';
+
+console.error('=== MCP SERVER IMPORTS COMPLETED ===');
 
 const logger = new Logger('PermissionMCP');
 
@@ -25,6 +39,12 @@ interface PermissionResponse {
   message?: string;
 }
 
+interface IPCApproval {
+  approvalId: string;
+  approved: boolean;
+  timestamp: number;
+}
+
 class PermissionMCPServer {
   private server: Server;
   private slack: WebClient;
@@ -32,8 +52,23 @@ class PermissionMCPServer {
     resolve: (response: PermissionResponse) => void;
     reject: (error: Error) => void;
   }>();
+  private ipcFilePath: string;
 
   constructor() {
+    // Force logging to stderr so we can see it
+    console.error('[MCP-DEBUG] PermissionMCPServer constructor called', {
+      workingDir: process.cwd(),
+      dirname: __dirname,
+      processId: process.pid,
+      isMain: require.main === module
+    });
+    
+    logger.info('PermissionMCPServer constructor called', {
+      workingDir: process.cwd(),
+      dirname: __dirname,
+      processId: process.pid,
+      isMain: require.main === module
+    });
     this.server = new Server(
       {
         name: "permission-prompt",
@@ -47,7 +82,105 @@ class PermissionMCPServer {
     );
 
     this.slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+    // Use a fixed path that both processes can access
+    this.ipcFilePath = path.join(__dirname, '..', '.permission-approvals.json');
     this.setupHandlers();
+    this.cleanupIPCFile();
+  }
+
+  private cleanupIPCFile() {
+    try {
+      logger.info('MCP server using IPC file path', { ipcFilePath: this.ipcFilePath });
+      if (fs.existsSync(this.ipcFilePath)) {
+        fs.unlinkSync(this.ipcFilePath);
+        logger.debug('Cleaned up existing IPC file');
+      }
+    } catch (error) {
+      logger.warn('Could not clean up IPC file on startup', error);
+    }
+  }
+
+  private readIPCFile(): Record<string, IPCApproval> {
+    try {
+      logger.debug('Attempting to read IPC file', { 
+        ipcFilePath: this.ipcFilePath, 
+        exists: fs.existsSync(this.ipcFilePath) 
+      });
+      
+      if (fs.existsSync(this.ipcFilePath)) {
+        const data = fs.readFileSync(this.ipcFilePath, 'utf-8');
+        const approvals = JSON.parse(data);
+        logger.debug('Successfully read IPC file', { 
+          approvalCount: Object.keys(approvals).length,
+          approvalIds: Object.keys(approvals)
+        });
+        return approvals;
+      } else {
+        logger.debug('IPC file does not exist');
+      }
+    } catch (error: any) {
+      logger.warn('Error reading IPC file', { error: error.message, ipcFilePath: this.ipcFilePath });
+    }
+    return {};
+  }
+
+  private removeFromIPCFile(approvalId: string) {
+    try {
+      const approvals = this.readIPCFile();
+      if (approvals[approvalId]) {
+        delete approvals[approvalId];
+        fs.writeFileSync(this.ipcFilePath, JSON.stringify(approvals, null, 2));
+        logger.debug('Removed approval from IPC file', { approvalId });
+      }
+    } catch (error) {
+      logger.error('Error removing approval from IPC file', error);
+    }
+  }
+
+  private checkForApproval(approvalId: string): boolean {
+    logger.debug('Checking for approval', { 
+      approvalId, 
+      pendingCount: this.pendingApprovals.size,
+      pendingIds: Array.from(this.pendingApprovals.keys())
+    });
+    
+    const approvals = this.readIPCFile();
+    const approval = approvals[approvalId];
+    
+    logger.debug('Approval check result', { 
+      approvalId, 
+      found: !!approval,
+      approved: approval?.approved,
+      timestamp: approval?.timestamp
+    });
+    
+    if (approval) {
+      const pending = this.pendingApprovals.get(approvalId);
+      if (pending) {
+        console.error(`[MCP-DEBUG] RESOLVING APPROVAL: ${approvalId} with ${approval.approved ? 'ALLOW' : 'DENY'}`);
+        this.pendingApprovals.delete(approvalId);
+        pending.resolve({
+          behavior: approval.approved ? 'allow' : 'deny',
+          message: approval.approved ? 'Approved by user' : 'Denied by user'
+        });
+        
+        // Clean up the IPC file entry
+        this.removeFromIPCFile(approvalId);
+        
+        logger.info('Successfully resolved approval from IPC', { approvalId, approved: approval.approved });
+        console.error(`[MCP-DEBUG] APPROVAL RESOLVED SUCCESSFULLY: ${approvalId}`);
+        return true;
+      } else {
+        console.error(`[MCP-DEBUG] APPROVAL FOUND BUT NO PENDING RESOLVER: ${approvalId}, pending count: ${this.pendingApprovals.size}`);
+        logger.warn('Approval found but no pending resolver', { 
+          approvalId, 
+          pendingCount: this.pendingApprovals.size,
+          allPendingIds: Array.from(this.pendingApprovals.keys())
+        });
+      }
+    }
+    
+    return false;
   }
 
   private setupHandlers() {
@@ -90,7 +223,7 @@ class PermissionMCPServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name === "permission_prompt") {
-        return await this.handlePermissionPrompt(request.params.arguments as PermissionRequest);
+        return await this.handlePermissionPrompt(request.params.arguments as unknown as PermissionRequest);
       }
       throw new Error(`Unknown tool: ${request.params.name}`);
     });
@@ -224,10 +357,27 @@ class PermissionMCPServer {
       // Store the promise resolvers
       this.pendingApprovals.set(approvalId, { resolve, reject });
       
+      console.error(`[MCP-DEBUG] WAITING FOR APPROVAL: ${approvalId}, pending count: ${this.pendingApprovals.size}`);
+      logger.info('Started waiting for approval', { 
+        approvalId, 
+        pendingCount: this.pendingApprovals.size,
+        ipcFilePath: this.ipcFilePath 
+      });
+      
+      // Start polling for approval
+      const pollInterval = setInterval(() => {
+        if (this.checkForApproval(approvalId)) {
+          clearInterval(pollInterval);
+        }
+      }, 500); // Check every 500ms
+      
       // Set timeout (5 minutes)
       setTimeout(() => {
         if (this.pendingApprovals.has(approvalId)) {
+          clearInterval(pollInterval);
           this.pendingApprovals.delete(approvalId);
+          console.error(`[MCP-DEBUG] APPROVAL TIMED OUT: ${approvalId}`);
+          logger.warn('Approval request timed out', { approvalId });
           resolve({
             behavior: 'deny',
             message: 'Permission request timed out'
@@ -251,9 +401,18 @@ class PermissionMCPServer {
   }
 
   async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    logger.info('Permission MCP server started');
+    try {
+      console.error('[MCP-DEBUG] Starting MCP server connection...');
+      const transport = new StdioServerTransport();
+      console.error('[MCP-DEBUG] Created StdioServerTransport');
+      await this.server.connect(transport);
+      console.error('[MCP-DEBUG] MCP server connected successfully');
+      logger.info('Permission MCP server started');
+    } catch (error) {
+      console.error('[MCP-DEBUG] Error starting MCP server:', error);
+      logger.error('Failed to start Permission MCP server', error);
+      throw error;
+    }
   }
 }
 
@@ -261,7 +420,7 @@ class PermissionMCPServer {
 export const permissionServer = new PermissionMCPServer();
 
 // Run if this file is executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (require.main === module) {
   permissionServer.run().catch((error) => {
     logger.error('Permission MCP server error:', error);
     process.exit(1);

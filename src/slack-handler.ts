@@ -6,7 +6,7 @@ import { WorkingDirectoryManager } from './working-directory-manager';
 import { FileHandler, ProcessedFile } from './file-handler';
 import { TodoManager, Todo } from './todo-manager';
 import { McpManager } from './mcp-manager';
-import { permissionServer } from './permission-mcp-server';
+import { PermissionIPC } from './permission-ipc';
 import { config } from './config';
 
 interface MessageEvent {
@@ -35,6 +35,7 @@ export class SlackHandler {
   private fileHandler: FileHandler;
   private todoManager: TodoManager;
   private mcpManager: McpManager;
+  private permissionIPC: PermissionIPC;
   private todoMessages: Map<string, string> = new Map(); // sessionKey -> messageTs
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
@@ -47,6 +48,7 @@ export class SlackHandler {
     this.workingDirManager = new WorkingDirectoryManager();
     this.fileHandler = new FileHandler();
     this.todoManager = new TodoManager();
+    this.permissionIPC = new PermissionIPC();
   }
 
   async handleMessage(event: MessageEvent, say: any) {
@@ -568,16 +570,32 @@ export class SlackHandler {
     }
   }
 
+  private convertEmojiToSlackName(emoji: string): string {
+    const emojiMap: { [key: string]: string } = {
+      '🤔': 'thinking_face',
+      '⚙️': 'gear', 
+      '✅': 'white_check_mark',
+      '❌': 'x',
+      '⏹️': 'stop_button',
+      '🔄': 'arrows_counterclockwise',
+      '📋': 'clipboard'
+    };
+    return emojiMap[emoji] || emoji;
+  }
+
   private async updateMessageReaction(sessionKey: string, emoji: string): Promise<void> {
     const originalMessage = this.originalMessages.get(sessionKey);
     if (!originalMessage) {
       return;
     }
 
+    // Convert Unicode emoji to Slack emoji name
+    const slackEmojiName = this.convertEmojiToSlackName(emoji);
+
     // Check if we're already showing this emoji
     const currentEmoji = this.currentReactions.get(sessionKey);
-    if (currentEmoji === emoji) {
-      this.logger.debug('Reaction already set, skipping', { sessionKey, emoji });
+    if (currentEmoji === slackEmojiName) {
+      this.logger.debug('Reaction already set, skipping', { sessionKey, emoji: slackEmojiName });
       return;
     }
 
@@ -604,15 +622,16 @@ export class SlackHandler {
       await this.app.client.reactions.add({
         channel: originalMessage.channel,
         timestamp: originalMessage.ts,
-        name: emoji,
+        name: slackEmojiName,
       });
 
       // Track the current reaction
-      this.currentReactions.set(sessionKey, emoji);
+      this.currentReactions.set(sessionKey, slackEmojiName);
 
       this.logger.debug('Updated message reaction', { 
         sessionKey, 
-        emoji, 
+        emoji: slackEmojiName,
+        originalEmoji: emoji,
         previousEmoji: currentEmoji,
         channel: originalMessage.channel, 
         ts: originalMessage.ts 
@@ -712,6 +731,40 @@ export class SlackHandler {
     return formatted;
   }
 
+  private async handlePermissionAction(body: any, approved: boolean, respond: any): Promise<void> {
+    try {
+      const approvalId = body.actions[0].value;
+      this.logger.info('Permission action received', { 
+        approvalId, 
+        approved, 
+        userId: body.user.id,
+        actionId: body.actions[0].action_id 
+      });
+
+      // Write the approval decision to the IPC file
+      this.permissionIPC.writeApproval(approvalId, approved);
+
+      // Clean up old approvals to prevent IPC file from growing
+      this.permissionIPC.cleanupOldApprovals();
+
+      // Respond to indicate the action was processed
+      await respond({
+        text: approved ? '✅ Permission approved' : '❌ Permission denied',
+        replace_original: false,
+        response_type: 'ephemeral'
+      });
+
+      this.logger.debug('Permission approval written to IPC file', { approvalId, approved });
+    } catch (error) {
+      this.logger.error('Error handling permission action', error);
+      await respond({
+        text: '❌ Error processing permission request',
+        replace_original: false,
+        response_type: 'ephemeral'
+      });
+    }
+  }
+
   setupEventHandlers() {
     // Handle direct messages
     this.app.message(async ({ message, say }) => {
@@ -749,32 +802,15 @@ export class SlackHandler {
       }
     });
 
-    // Handle permission approval button clicks
+    // Permission button handlers for IPC-based approval system
     this.app.action('approve_tool', async ({ ack, body, respond }) => {
       await ack();
-      const approvalId = (body as any).actions[0].value;
-      this.logger.info('Tool approval granted', { approvalId });
-      
-      permissionServer.resolveApproval(approvalId, true);
-      
-      await respond({
-        response_type: 'ephemeral',
-        text: '✅ Tool execution approved'
-      });
+      await this.handlePermissionAction(body, true, respond);
     });
 
-    // Handle permission denial button clicks
     this.app.action('deny_tool', async ({ ack, body, respond }) => {
       await ack();
-      const approvalId = (body as any).actions[0].value;
-      this.logger.info('Tool approval denied', { approvalId });
-      
-      permissionServer.resolveApproval(approvalId, false);
-      
-      await respond({
-        response_type: 'ephemeral',
-        text: '❌ Tool execution denied'
-      });
+      await this.handlePermissionAction(body, false, respond);
     });
 
     // Cleanup inactive sessions periodically
