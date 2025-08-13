@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-08-13T11:43:06.018Z",
+  "workingDirectories": {
+    "C09A450SH3K": {
+      "channelId": "C09A450SH3K",
+      "directory": "/Users/syoung/palm-advisory-services",
+      "setAt": "2025-08-13T01:14:43.227Z"
+    },
+    "C099YJDM39C": {
+      "channelId": "C099YJDM39C",
+      "directory": "/Users/syoung/claude-code-slack-bot",
+      "setAt": "2025-08-13T11:42:56.534Z"
+    }
+  },
+  "sessions": {
+    "U09A450N22D-C099YJDM39C-1755084393.021539": {
+      "userId": "U09A450N22D",
+      "channelId": "C099YJDM39C",
+      "threadTs": "1755084393.021539",
+      "sessionId": "132865fb-087f-4203-8c2e-9678ac9f5b18",
+      "isActive": true,
+      "lastActivity": "2025-08-13T11:26:35.679Z"
+    }
+  }
+}

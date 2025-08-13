@@ -1,13 +1,16 @@
-import { App } from '@slack/bolt';
-import { ClaudeHandler } from './claude-handler';
+import pkg from '@slack/bolt';
+const { App } = pkg;
+import { ClaudeHandler } from './claude-handler.js';
 import { SDKMessage } from '@anthropic-ai/claude-code';
-import { Logger } from './logger';
-import { WorkingDirectoryManager } from './working-directory-manager';
-import { FileHandler, ProcessedFile } from './file-handler';
-import { TodoManager, Todo } from './todo-manager';
-import { McpManager } from './mcp-manager';
-import { PermissionIPC } from './permission-ipc';
-import { config } from './config';
+import { Logger } from './logger.js';
+import { WorkingDirectoryManager } from './working-directory-manager.js';
+import { FileHandler, ProcessedFile } from './file-handler.js';
+import { TodoManager, Todo } from './todo-manager.js';
+import { McpManager } from './mcp-manager.js';
+import { PermissionIPC } from './permission-ipc.js';
+import { config } from './config.js';
+import { HealthServer } from './health-server.js';
+import { PersistenceManager } from './persistence-manager.js';
 
 interface MessageEvent {
   user: string;
@@ -27,7 +30,7 @@ interface MessageEvent {
 }
 
 export class SlackHandler {
-  private app: App;
+  private app: any;
   private claudeHandler: ClaudeHandler;
   private activeControllers: Map<string, AbortController> = new Map();
   private logger = new Logger('SlackHandler');
@@ -40,12 +43,16 @@ export class SlackHandler {
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
   private botUserId: string | null = null;
+  private healthServer: HealthServer | null = null;
+  private persistenceManager: PersistenceManager;
 
-  constructor(app: App, claudeHandler: ClaudeHandler, mcpManager: McpManager) {
+  constructor(app: any, claudeHandler: ClaudeHandler, mcpManager: McpManager, persistenceManager: PersistenceManager, healthServer?: HealthServer) {
     this.app = app;
     this.claudeHandler = claudeHandler;
     this.mcpManager = mcpManager;
-    this.workingDirManager = new WorkingDirectoryManager();
+    this.persistenceManager = persistenceManager;
+    this.healthServer = healthServer || null;
+    this.workingDirManager = new WorkingDirectoryManager(persistenceManager);
     this.fileHandler = new FileHandler();
     this.todoManager = new TodoManager();
     this.permissionIPC = new PermissionIPC();
@@ -204,6 +211,11 @@ export class SlackHandler {
 
     const abortController = new AbortController();
     this.activeControllers.set(sessionKey, abortController);
+    
+    // Update active sessions count in health server
+    if (this.healthServer) {
+      this.healthServer.updateActiveSessionsCount(this.activeControllers.size);
+    }
 
     let session = this.claudeHandler.getSession(user, channel, thread_ts || ts);
     if (!session) {
@@ -340,6 +352,11 @@ export class SlackHandler {
         sessionKey,
         messageCount: currentMessages.length,
       });
+      
+      // Record successful interaction in health server
+      if (this.healthServer) {
+        this.healthServer.recordSuccessfulInteraction();
+      }
 
       // Clean up temporary files
       if (processedFiles.length > 0) {
@@ -387,6 +404,11 @@ export class SlackHandler {
       }
     } finally {
       this.activeControllers.delete(sessionKey);
+      
+      // Update active sessions count in health server
+      if (this.healthServer) {
+        this.healthServer.updateActiveSessionsCount(this.activeControllers.size);
+      }
       
       // Clean up todo tracking if session ended
       if (session?.sessionId) {

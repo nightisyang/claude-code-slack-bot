@@ -1,0 +1,6 @@
+# Claude Code Slack Bot Health Check
+# Run every 5 minutes to check if bot is healthy and restart if needed
+*/5 * * * * /Users/syoung/claude-code-slack-bot/scripts/health-check-simple.sh
+
+# Optional: Clean up logs daily at 2 AM
+0 2 * * * find /Users/syoung/claude-code-slack-bot/logs -name "*.log" -mtime +7 -delete

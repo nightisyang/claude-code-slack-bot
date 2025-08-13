@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Logger } from './logger';
+import { Logger } from './logger.js';
 
 export type McpStdioServerConfig = {
   type?: 'stdio'; // Optional for backwards compatibility
@@ -84,7 +84,7 @@ export class McpManager {
     }
 
     // Validate based on type
-    if (!config.type || config.type === 'stdio') {
+    if (!(config as any).type || (config as any).type === 'stdio') {
       // Stdio server
       const stdioConfig = config as McpStdioServerConfig;
       if (!stdioConfig.command || typeof stdioConfig.command !== 'string') {
