@@ -1,6 +1,9 @@
 import { Logger } from '../logger.js';
 import { githubConfig } from './github-config.js';
 import { GitHubApiClient } from './github-api-client.js';
+import { GitHubRepositoryManager, RepositoryInfo } from './github-repository-manager.js';
+import { GitHubSlackNotifier } from './github-slack-notifier.js';
+import { ClaudeHandler } from '../claude-handler.js';
 import {
   GitHubWebhookPayload,
   GitHubWebhookHeaders,
@@ -14,9 +17,15 @@ import {
 export class GitHubWebhookHandler {
   private logger = new Logger('GitHubWebhookHandler');
   private apiClient: GitHubApiClient;
+  private repositoryManager: GitHubRepositoryManager;
+  private slackNotifier: GitHubSlackNotifier;
+  private claudeHandler: ClaudeHandler;
 
-  constructor(apiClient: GitHubApiClient) {
+  constructor(apiClient: GitHubApiClient, claudeHandler: ClaudeHandler) {
     this.apiClient = apiClient;
+    this.claudeHandler = claudeHandler;
+    this.repositoryManager = new GitHubRepositoryManager();
+    this.slackNotifier = new GitHubSlackNotifier();
   }
 
   /**
@@ -127,13 +136,35 @@ export class GitHubWebhookHandler {
         actions.push(`Logged PR #${pr.number} opened`);
         if (!pr.draft) {
           actions.push('PR is ready for review');
-          // Future: Trigger automated review
+          // Trigger automated review for non-draft PRs
+          try {
+            const reviewResult = await this.analyzePullRequest(payload);
+            if (reviewResult.success) {
+              actions.push('Automated review completed and posted');
+            } else {
+              actions.push(`Automated review failed: ${reviewResult.error}`);
+            }
+          } catch (error) {
+            this.logger.error('Failed to analyze PR', { prNumber: pr.number, error });
+            actions.push('Automated review failed due to error');
+          }
         }
         break;
       
       case 'synchronize':
         actions.push(`Logged PR #${pr.number} updated with new commits`);
-        // Future: Re-run automated review on new changes
+        // Re-run automated review on new changes
+        try {
+          const reviewResult = await this.analyzePullRequest(payload);
+          if (reviewResult.success) {
+            actions.push('Automated re-review completed and posted');
+          } else {
+            actions.push(`Automated re-review failed: ${reviewResult.error}`);
+          }
+        } catch (error) {
+          this.logger.error('Failed to re-analyze PR', { prNumber: pr.number, error });
+          actions.push('Automated re-review failed due to error');
+        }
         break;
       
       case 'closed':
@@ -305,6 +336,152 @@ export class GitHubWebhookHandler {
       actions_taken: actions,
     };
   }
+
+  /**
+   * Analyze pull request using Claude Code AI
+   */
+  private async analyzePullRequest(payload: PullRequestPayload): Promise<{ success: boolean; error?: string }> {
+    const { pull_request: pr, repository } = payload;
+    const [owner, repo] = repository.full_name.split('/');
+    
+    this.logger.info('Starting PR analysis', {
+      repository: repository.full_name,
+      prNumber: pr.number,
+      title: pr.title,
+    });
+
+    let repoInfo: RepositoryInfo | null = null;
+
+    try {
+      // Get installation token for repository access
+      const installationToken = await this.apiClient['getInstallationToken']();
+      
+      // Ensure repository is cloned locally
+      repoInfo = await this.repositoryManager.ensureRepository(owner, repo, installationToken);
+      
+      // Checkout the PR branch
+      await this.repositoryManager.checkoutPullRequest(repoInfo, pr.number);
+      
+      // Get changed files and diff
+      const changedFiles = await this.repositoryManager.getPullRequestFiles(repoInfo, pr.base.ref);
+      const diff = await this.repositoryManager.getPullRequestDiff(repoInfo, pr.base.ref);
+      
+      // Prepare context for Claude analysis
+      const analysisPrompt = this.buildAnalysisPrompt(pr, changedFiles.all, diff);
+      
+      // Create a session for GitHub PR analysis
+      const sessionKey = `github-pr-${repository.full_name.replace('/', '-')}-${pr.number}`;
+      const session = this.claudeHandler.createSession('github-bot', 'github-analysis', sessionKey);
+      
+      // Set working directory to the repository
+      session.workingDirectory = repoInfo.localPath;
+      
+      // Send analysis request to Claude
+      const reviewResult = await this.claudeHandler.sendMessage(
+        'github-bot',
+        'github-analysis',
+        analysisPrompt,
+        [],
+        sessionKey
+      );
+      
+      // Extract review content from Claude's response
+      const reviewContent = this.extractReviewContent(reviewResult.response);
+      
+      // Post review as GitHub comment
+      await this.apiClient.createPullRequestComment(
+        owner,
+        repo,
+        pr.number,
+        reviewContent
+      );
+      
+      // Send Slack notification
+      await this.slackNotifier.notifyPRReviewCompleted(
+        repository.full_name,
+        pr.number,
+        pr.title,
+        pr.user.login,
+        pr.html_url
+      );
+      
+      this.logger.info('PR analysis completed successfully', {
+        repository: repository.full_name,
+        prNumber: pr.number,
+        filesAnalyzed: changedFiles.all.length,
+      });
+      
+      return { success: true };
+      
+    } catch (error) {
+      this.logger.error('PR analysis failed', {
+        repository: repository.full_name,
+        prNumber: pr.number,
+        error,
+      });
+      
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    } finally {
+      // Clean up repository after analysis
+      if (repoInfo) {
+        await this.repositoryManager.cleanup(repoInfo);
+      }
+    }
+  }
+
+  /**
+   * Build analysis prompt for Claude
+   */
+  private buildAnalysisPrompt(pr: any, changedFiles: string[], diff: string): string {
+    const reviewLevel = githubConfig.reviewLevel || 'comprehensive';
+    
+    return `Please perform a ${reviewLevel} code review for this pull request.
+
+**Pull Request Information:**
+- Title: ${pr.title}
+- Description: ${pr.body || 'No description provided'}
+- Author: ${pr.user.login}
+- Files Changed: ${changedFiles.length}
+
+**Changed Files:**
+${changedFiles.map(file => `- ${file}`).join('\n')}
+
+**Diff Content:**
+\`\`\`diff
+${diff}
+\`\`\`
+
+**Review Instructions:**
+1. Analyze the code changes for:
+   - Code quality and best practices
+   - Potential bugs or issues
+   - Security vulnerabilities
+   - Performance considerations
+   - Documentation needs
+
+2. Provide:
+   - Overall assessment (APPROVE, REQUEST_CHANGES, or COMMENT)
+   - Specific line-by-line feedback when needed
+   - Suggestions for improvement
+   - Security concerns if any
+
+3. Format your response as a GitHub review comment with:
+   - Summary of changes
+   - Key findings
+   - Recommendations
+   - Overall verdict
+
+Please be constructive and helpful in your feedback.`;
+  }
+
+  /**
+   * Extract review content from Claude's response
+   */
+  private extractReviewContent(claudeResponse: string): string {
+    // Format the response as a proper GitHub review comment
+    return `## 🤖 Automated Code Review\n\n${claudeResponse}\n\n---\n*Review generated by Claude Code AI*`;
+  }
+
 
   /**
    * Get processing statistics

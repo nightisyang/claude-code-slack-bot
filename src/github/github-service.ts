@@ -3,17 +3,20 @@ import { validateGitHubConfig, githubConfig } from './github-config.js';
 import { GitHubWebhookServer } from './github-webhook-server.js';
 import { GitHubWebhookHandler } from './github-webhook-handler.js';
 import { GitHubApiClient } from './github-api-client.js';
+import { ClaudeHandler } from '../claude-handler.js';
 
 export class GitHubService {
   private logger = new Logger('GitHubService');
   private webhookServer: GitHubWebhookServer;
   private webhookHandler: GitHubWebhookHandler;
   private apiClient: GitHubApiClient;
+  private claudeHandler: ClaudeHandler;
   private isRunning = false;
 
-  constructor() {
+  constructor(claudeHandler: ClaudeHandler) {
+    this.claudeHandler = claudeHandler;
     this.apiClient = new GitHubApiClient();
-    this.webhookHandler = new GitHubWebhookHandler(this.apiClient);
+    this.webhookHandler = new GitHubWebhookHandler(this.apiClient, this.claudeHandler);
     this.webhookServer = new GitHubWebhookServer(this.webhookHandler);
   }
 
