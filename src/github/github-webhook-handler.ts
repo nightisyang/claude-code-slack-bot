@@ -377,16 +377,20 @@ export class GitHubWebhookHandler {
       session.workingDirectory = repoInfo.localPath;
       
       // Send analysis request to Claude
-      const reviewResult = await this.claudeHandler.sendMessage(
-        'github-bot',
-        'github-analysis',
+      let reviewResult = '';
+      for await (const message of this.claudeHandler.streamQuery(
         analysisPrompt,
-        [],
-        sessionKey
-      );
+        session,
+        undefined,
+        repoInfo.localPath
+      )) {
+        if (message.content && typeof message.content === 'string') {
+          reviewResult += message.content;
+        }
+      }
       
       // Extract review content from Claude's response
-      const reviewContent = this.extractReviewContent(reviewResult.response);
+      const reviewContent = this.extractReviewContent(reviewResult);
       
       // Post review as GitHub comment
       await this.apiClient.createPullRequestComment(

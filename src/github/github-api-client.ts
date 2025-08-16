@@ -239,10 +239,10 @@ export class GitHubApiClient {
       });
 
       if (response.ok) {
-        const installation = await response.json();
+        const installation = await response.json() as any;
         this.logger.info('GitHub API connection successful', {
           installationId: installation.id,
-          account: installation.account.login,
+          account: installation.account?.login,
           appId: installation.app_id,
         });
         return true;

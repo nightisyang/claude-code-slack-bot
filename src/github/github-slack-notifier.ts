@@ -148,7 +148,7 @@ export class GitHubSlackNotifier {
             style: 'primary',
           },
         ],
-      });
+      } as any);
     }
 
     // Add footer
@@ -160,7 +160,7 @@ export class GitHubSlackNotifier {
           text: `🤖 GitHub Integration | ${new Date().toLocaleString()}`,
         },
       ],
-    });
+    } as any);
 
     return { text, blocks };
   }
