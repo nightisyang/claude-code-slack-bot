@@ -15,6 +15,12 @@ export interface HealthServerStatus {
     fileExists: boolean;
     lastUpdated?: string;
   };
+  githubService?: {
+    enabled: boolean;
+    running: boolean;
+    webhookServerRunning: boolean;
+    processingStats: any;
+  };
 }
 
 export class HealthServer {

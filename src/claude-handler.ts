@@ -161,7 +161,11 @@ export class ClaudeHandler {
         hasUsage: !!result.usage
       });
 
-      // RESTORED: Extract session ID from provider metadata when available
+      // MOVED: Metadata extraction now happens AFTER streaming completes
+      // This prevents the deadlock where metadata Promise waits for streaming to finish
+      // but we're trying to extract it before streaming starts
+      this.logger.info('⏭️ SKIPPING pre-streaming metadata extraction to prevent deadlock');
+      /*
       const metadata = await result.providerMetadata;
       if (session && metadata?.['claude-code']?.sessionId) {
         const newSessionId = String(metadata['claude-code'].sessionId);
@@ -182,23 +186,68 @@ export class ClaudeHandler {
           this.logger.debug('🔑 Session ID unchanged', { sessionId: session.sessionId });
         }
       }
+      */
 
       this.logger.info('🔄 About to start streaming text chunks...');
 
       let fullResponse = '';
       let chunkCount = 0;
+      let lastChunkTime = Date.now();
+      const streamStartTime = Date.now();
       
-      // Stream text chunks in compatible format with extensive debugging
+      // Heartbeat timer for long-running streams - VERY VERBOSE
+      const heartbeatInterval = setInterval(() => {
+        const elapsed = Date.now() - streamStartTime;
+        const timeSinceLastChunk = Date.now() - lastChunkTime;
+        this.logger.info('💓 ❗ STREAMING HEARTBEAT ❗', {
+          sessionId: session?.sessionId,
+          elapsedMs: elapsed,
+          elapsedSec: Math.round(elapsed / 1000),
+          timeSinceLastChunkMs: timeSinceLastChunk,
+          timeSinceLastChunkSec: Math.round(timeSinceLastChunk / 1000),
+          chunksReceived: chunkCount,
+          totalLength: fullResponse.length,
+          abortSignalAborted: abortController?.signal.aborted || false,
+          streamIsActive: true
+        });
+        
+        // Extra loud if no chunks received for a while
+        if (timeSinceLastChunk > 10000) {
+          this.logger.warn('⚠️ 🔊 NO CHUNKS FOR 10+ SECONDS - POSSIBLE HANG');
+        }
+      }, 3000); // Every 3 seconds for maximum verbosity
+      
+      // Stream text chunks in compatible format with MAXIMUM debugging
       try {
+        this.logger.info('🎯 ❗ ENTERING for await loop for textStream ❗');
+        
         for await (const chunk of result.textStream) {
+          const chunkReceiveTime = Date.now();
           chunkCount++;
+          lastChunkTime = chunkReceiveTime;
+          const chunkProcessStartTime = Date.now();
+          
           fullResponse += chunk;
           
-          this.logger.info(`📝 Received chunk ${chunkCount}`, {
+          this.logger.info(`📝 🔊 CHUNK ${chunkCount} RECEIVED 🔊`, {
             chunkLength: chunk.length,
             totalLength: fullResponse.length,
-            chunkPreview: chunk.substring(0, 50)
+            chunkPreview: chunk.substring(0, 150) + (chunk.length > 150 ? '...' : ''),
+            elapsedSinceStreamStart: chunkReceiveTime - streamStartTime,
+            timeSinceLastChunk: chunkCount > 1 ? chunkReceiveTime - lastChunkTime : 0,
+            abortSignalAborted: abortController?.signal.aborted || false,
+            sessionId: session?.sessionId,
+            chunkNumber: chunkCount
           });
+          
+          // Check abort signal before yielding - VERBOSE
+          if (abortController?.signal.aborted) {
+            this.logger.warn('🛑 ❗ ABORT SIGNAL DETECTED - breaking from chunk loop ❗');
+            clearInterval(heartbeatInterval);
+            break;
+          }
+          
+          this.logger.debug(`📤 ❗ YIELDING chunk ${chunkCount} to consumer ❗`);
           
           // Yield text chunks in a format compatible with existing code
           yield {
@@ -208,37 +257,121 @@ export class ClaudeHandler {
             },
             session_id: session?.sessionId
           };
+          
+          const chunkProcessEndTime = Date.now();
+          this.logger.debug(`✅ ❗ CHUNK ${chunkCount} yielded successfully in ${chunkProcessEndTime - chunkProcessStartTime}ms ❗`);
         }
         
-        this.logger.info('✅ Streaming completed', {
+        clearInterval(heartbeatInterval);
+        this.logger.info('🏁 ❗ EXITED for await loop - streaming iterator completed ❗');
+        
+        const streamEndTime = Date.now();
+        this.logger.info('✅ 🔊 STREAMING COMPLETED 🔊', {
           totalChunks: chunkCount,
-          totalLength: fullResponse.length
+          totalLength: fullResponse.length,
+          totalDurationMs: streamEndTime - streamStartTime,
+          totalDurationSec: Math.round((streamEndTime - streamStartTime) / 1000),
+          averageChunkSize: chunkCount > 0 ? Math.round(fullResponse.length / chunkCount) : 0,
+          averageTimeBetweenChunks: chunkCount > 1 ? Math.round((streamEndTime - streamStartTime) / chunkCount) : 0,
+          finalAbortState: abortController?.signal.aborted || false,
+          sessionId: session?.sessionId
         });
       } catch (streamError) {
-        this.logger.error('❌ Error during streaming', streamError);
+        clearInterval(heartbeatInterval);
+        this.logger.error('❌ 🔊 ERROR DURING STREAMING 🔊', {
+          error: streamError,
+          errorMessage: streamError.message,
+          errorName: streamError.name,
+          errorStack: streamError.stack,
+          chunksReceivedBeforeError: chunkCount,
+          lengthReceivedBeforeError: fullResponse.length,
+          elapsedBeforeError: Date.now() - streamStartTime,
+          abortSignalAborted: abortController?.signal.aborted || false,
+          sessionId: session?.sessionId
+        });
         throw streamError;
       }
 
       this.logger.info('📊 Getting final metadata...');
 
-      // Get final metadata
-      const usage = await result.usage;
-      const providerMetadata = await result.providerMetadata;
+      // Extract final metadata with timeout protection at the natural completion stage
+      let finalUsage = null;
+      let finalProviderMetadata = null;
+      
+      try {
+        this.logger.info('🔍 EXTRACTING final metadata with timeout protection...');
+        const finalMetadataStart = Date.now();
+        
+        // Extract both usage and provider metadata with timeout
+        const metadataResults = await Promise.race([
+          Promise.all([result.usage, result.providerMetadata]),
+          new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('10-second final metadata timeout')), 10000)
+          )
+        ]);
+        
+        const [usage, providerMetadata] = metadataResults;
+        
+        const finalMetadataTime = Date.now() - finalMetadataStart;
+        finalUsage = usage;
+        finalProviderMetadata = providerMetadata;
+        
+        this.logger.info('🔍 ✅ FINAL METADATA RESOLVED!', {
+          extractionTimeMs: finalMetadataTime,
+          hasUsage: !!usage,
+          hasProviderMetadata: !!providerMetadata,
+          usageKeys: usage ? Object.keys(usage) : [],
+          providerMetadataKeys: providerMetadata ? Object.keys(providerMetadata) : [],
+          hasClaudeCode: !!providerMetadata?.['claude-code'],
+          sessionId: providerMetadata?.['claude-code']?.sessionId,
+          costUsd: providerMetadata?.['claude-code']?.costUsd,
+          durationMs: providerMetadata?.['claude-code']?.durationMs
+        });
 
-      this.logger.info('📋 Final metadata received', {
-        usage,
-        providerMetadata
-      });
+        // Update session with captured session ID for NEXT conversation
+        if (session && providerMetadata?.['claude-code']?.sessionId) {
+          const newSessionId = String(providerMetadata['claude-code'].sessionId);
+          
+          if (!session.sessionId || session.sessionId !== newSessionId) {
+            session.sessionId = newSessionId;
+            this.logger.info('🔑 Session ID captured for NEXT conversation!', { 
+              sessionId: session.sessionId,
+              model: 'sonnet',
+              wasNewSession: !session.sessionId
+            });
+            
+            // Save session ID to persistence for future resumption
+            const sessionKey = this.getSessionKey(session.userId, session.channelId, session.threadTs);
+            this.saveSessionState(sessionKey, session);
+          } else {
+            this.logger.debug('🔑 Session ID unchanged', { sessionId: session.sessionId });
+          }
+        } else {
+          this.logger.warn('🔍 No session ID found in final metadata', {
+            hasSession: !!session,
+            hasProviderMetadata: !!providerMetadata,
+            hasClaudeCodeSection: !!providerMetadata?.['claude-code']
+          });
+        }
+        
+      } catch (finalMetadataError) {
+        this.logger.warn('🔍 ⏰ FINAL METADATA EXTRACTION TIMED OUT', {
+          error: finalMetadataError.message,
+          sessionId: session?.sessionId,
+          continueWithNullMetadata: true
+        });
+        // Continue with null values - graceful degradation
+      }
 
-      // Yield completion result
+      // Yield completion result with real metadata (or null if timed out)
       yield {
         type: 'result',
         subtype: 'success',
         session_id: session?.sessionId,
         result: fullResponse,
-        usage: usage,
-        total_cost_usd: providerMetadata?.['claude-code']?.costUsd || 0,
-        duration_ms: providerMetadata?.['claude-code']?.durationMs || 0
+        usage: finalUsage,
+        total_cost_usd: finalProviderMetadata?.['claude-code']?.costUsd || 0,
+        duration_ms: finalProviderMetadata?.['claude-code']?.durationMs || 0
       };
 
       this.logger.info('🎉 streamQuery completed successfully');
