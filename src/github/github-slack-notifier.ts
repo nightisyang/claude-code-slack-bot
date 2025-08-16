@@ -9,7 +9,9 @@ export interface GitHubSlackNotification {
   action: string;
   author?: string;
   url?: string;
-  eventType: 'pr_opened' | 'pr_review_completed' | 'pr_merged' | 'issue_opened' | 'issue_comment';
+  eventType: 'pr_opened' | 'pr_review_completed' | 'pr_merged' | 'issue_opened' | 'issue_comment' | 'issue_response';
+  confidence?: number;
+  responsePreview?: string;
 }
 
 export class GitHubSlackNotifier {
@@ -97,6 +99,12 @@ export class GitHubSlackNotifier {
         itemType = 'Issue';
         itemNumber = `#${issueNumber}`;
         break;
+      case 'issue_response':
+        emoji = '🤖';
+        actionText = 'responded to';
+        itemType = 'Issue';
+        itemNumber = `#${issueNumber}`;
+        break;
     }
 
     const text = `${emoji} ${itemType} ${itemNumber} ${actionText} in ${repository}`;
@@ -131,6 +139,29 @@ export class GitHubSlackNotifier {
           text: `*Author:* ${author}`,
         },
       });
+    }
+
+    // Add special fields for issue response notifications
+    if (eventType === 'issue_response') {
+      if (notification.confidence !== undefined) {
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*AI Confidence:* ${(notification.confidence * 100).toFixed(1)}%`,
+          },
+        });
+      }
+      
+      if (notification.responsePreview) {
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Response Preview:*\n> ${notification.responsePreview}`,
+          },
+        });
+      }
     }
 
     // Add action buttons if URL is available
@@ -246,6 +277,31 @@ export class GitHubSlackNotifier {
       url: issueUrl,
       action: 'opened',
       eventType: 'issue_opened',
+    });
+  }
+
+  /**
+   * Send automated issue response notification
+   */
+  async notifyIssueResponse(
+    repository: string,
+    issueNumber: number,
+    title: string,
+    originalAuthor: string,
+    issueUrl: string,
+    responsePreview: string,
+    confidence: number
+  ): Promise<void> {
+    await this.sendNotification({
+      repository,
+      issueNumber,
+      title,
+      author: originalAuthor,
+      url: issueUrl,
+      action: 'responded to automatically',
+      eventType: 'issue_response',
+      confidence,
+      responsePreview,
     });
   }
 

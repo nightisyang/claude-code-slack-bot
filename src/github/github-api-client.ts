@@ -222,6 +222,13 @@ export class GitHubApiClient {
   }
 
   /**
+   * Make a public API request (used by other modules)
+   */
+  async makePublicApiRequest<T>(endpoint: string, options?: any): Promise<T> {
+    return this.makeApiRequest<T>(endpoint, options);
+  }
+
+  /**
    * Test API connection and permissions
    */
   async testConnection(): Promise<boolean> {

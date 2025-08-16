@@ -4,6 +4,8 @@ import { GitHubApiClient } from './github-api-client.js';
 import { GitHubRepositoryManager, RepositoryInfo } from './github-repository-manager.js';
 import { GitHubSlackNotifier } from './github-slack-notifier.js';
 import { ClaudeHandler } from '../claude-handler.js';
+import { GitHubIssueResponder } from './github-issue-responder.js';
+import { GitHubResponseValidator } from './github-response-validator.js';
 import {
   GitHubWebhookPayload,
   GitHubWebhookHeaders,
@@ -20,12 +22,16 @@ export class GitHubWebhookHandler {
   private repositoryManager: GitHubRepositoryManager;
   private slackNotifier: GitHubSlackNotifier;
   private claudeHandler: ClaudeHandler;
+  private issueResponder: GitHubIssueResponder;
+  private responseValidator: GitHubResponseValidator;
 
   constructor(apiClient: GitHubApiClient, claudeHandler: ClaudeHandler) {
     this.apiClient = apiClient;
     this.claudeHandler = claudeHandler;
     this.repositoryManager = new GitHubRepositoryManager();
     this.slackNotifier = new GitHubSlackNotifier();
+    this.issueResponder = new GitHubIssueResponder(claudeHandler, apiClient);
+    this.responseValidator = new GitHubResponseValidator();
   }
 
   /**
@@ -263,7 +269,7 @@ export class GitHubWebhookHandler {
     event: WebhookEvent,
     payload: IssueCommentPayload
   ): Promise<WebhookProcessingResult> {
-    const { action, comment, issue } = payload;
+    const { action, comment, issue, repository } = payload;
     const actions: string[] = [];
 
     this.logger.info('Handling issue comment event', {
@@ -271,12 +277,67 @@ export class GitHubWebhookHandler {
       issueNumber: issue.number,
       commenter: comment.user.login,
       isPullRequest: !!issue.pull_request,
+      issueResponseEnabled: githubConfig.issueResponse.enabled,
     });
 
-    if (issue.pull_request) {
-      actions.push(`Logged PR comment ${action} by ${comment.user.login} on PR #${issue.number}`);
+    // Handle different comment actions
+    if (action === 'created') {
+      if (issue.pull_request) {
+        actions.push(`Logged PR comment created by ${comment.user.login} on PR #${issue.number}`);
+      } else {
+        actions.push(`Logged issue comment created by ${comment.user.login} on issue #${issue.number}`);
+        
+        // Process automated response for regular issues (not PRs)
+        if (githubConfig.issueResponse.enabled && !issue.pull_request) {
+          try {
+            const responseResult = await this.issueResponder.processIssueComment(payload);
+            
+            if (responseResult.success) {
+              if (responseResult.responsePosted) {
+                actions.push(`Automated response posted with confidence ${responseResult.confidence.toFixed(2)}`);
+                
+                // Send Slack notification about the automated response
+                await this.slackNotifier.notifyIssueResponse(
+                  repository.full_name,
+                  issue.number,
+                  issue.title,
+                  comment.user.login,
+                  issue.html_url,
+                  responseResult.responsePreview,
+                  responseResult.confidence
+                );
+                
+                actions.push('Slack notification sent for automated response');
+              } else {
+                actions.push(`No automated response needed (confidence: ${responseResult.confidence.toFixed(2)})`);
+              }
+            } else {
+              actions.push(`Automated response failed: ${responseResult.error}`);
+            }
+          } catch (error) {
+            this.logger.error('Failed to process automated issue response', {
+              issueNumber: issue.number,
+              repository: repository.full_name,
+              error,
+            });
+            actions.push('Automated response processing failed');
+          }
+        }
+      }
+    } else if (action === 'edited') {
+      if (issue.pull_request) {
+        actions.push(`Logged PR comment edited by ${comment.user.login} on PR #${issue.number}`);
+      } else {
+        actions.push(`Logged issue comment edited by ${comment.user.login} on issue #${issue.number}`);
+      }
+    } else if (action === 'deleted') {
+      if (issue.pull_request) {
+        actions.push(`Logged PR comment deleted on PR #${issue.number}`);
+      } else {
+        actions.push(`Logged issue comment deleted on issue #${issue.number}`);
+      }
     } else {
-      actions.push(`Logged issue comment ${action} by ${comment.user.login} on issue #${issue.number}`);
+      actions.push(`Logged comment ${action} on ${issue.pull_request ? 'PR' : 'issue'} #${issue.number}`);
     }
 
     return {

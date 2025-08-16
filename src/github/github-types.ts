@@ -178,6 +178,19 @@ export interface WebhookProcessingResult {
   notification_sent?: boolean;
 }
 
+// Issue response configuration
+export interface IssueResponseConfig {
+  enabled: boolean;
+  mode: 'automatic' | 'review' | 'hybrid';
+  maxResponseLength: number;
+  confidenceThreshold: number;
+  rateLimitPerIssue: number;
+  rateLimitWindow: number; // in minutes
+  excludedLabels: string[];
+  includedCommentTypes: string[];
+  enableWelcomeMessages: boolean;
+}
+
 // Configuration types
 export interface GitHubServiceConfig {
   enabled: boolean;
@@ -187,4 +200,5 @@ export interface GitHubServiceConfig {
   slackNotificationChannel?: string;
   reviewLevel: 'basic' | 'comprehensive' | 'security-focused';
   enabledEvents: string[];
+  issueResponse: IssueResponseConfig;
 }

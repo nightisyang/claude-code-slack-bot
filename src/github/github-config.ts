@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitHubServiceConfig } from './github-types.js';
+import { GitHubServiceConfig, IssueResponseConfig } from './github-types.js';
 
 dotenv.config();
 
@@ -25,6 +25,17 @@ export const githubConfig: GitHubServiceConfig = {
     'issues',
     'push'
   ],
+  issueResponse: {
+    enabled: process.env.GITHUB_ISSUE_RESPONSE_ENABLED !== 'false', // Default to true
+    mode: (process.env.GITHUB_ISSUE_RESPONSE_MODE as 'automatic' | 'review' | 'hybrid') || 'automatic',
+    maxResponseLength: parseInt(process.env.GITHUB_ISSUE_RESPONSE_MAX_LENGTH || '4000'),
+    confidenceThreshold: parseFloat(process.env.GITHUB_ISSUE_RESPONSE_CONFIDENCE_THRESHOLD || '0.3'),
+    rateLimitPerIssue: parseInt(process.env.GITHUB_ISSUE_RESPONSE_RATE_LIMIT || '5'),
+    rateLimitWindow: parseInt(process.env.GITHUB_ISSUE_RESPONSE_RATE_WINDOW || '60'), // 60 minutes
+    excludedLabels: (process.env.GITHUB_ISSUE_RESPONSE_EXCLUDED_LABELS || 'wontfix,duplicate,invalid').split(',').map(l => l.trim()),
+    includedCommentTypes: (process.env.GITHUB_ISSUE_RESPONSE_INCLUDED_TYPES || 'question_technical,bug_report,feature_request,documentation,support,discussion').split(',').map(t => t.trim()),
+    enableWelcomeMessages: process.env.GITHUB_ISSUE_RESPONSE_WELCOME_MESSAGES !== 'false', // Default to true
+  },
 };
 
 export function validateGitHubConfig(): void {
