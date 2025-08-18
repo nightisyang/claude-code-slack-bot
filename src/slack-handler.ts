@@ -1,13 +1,16 @@
-import { App } from '@slack/bolt';
-import { ClaudeHandler } from './claude-handler';
+import pkg from '@slack/bolt';
+const { App } = pkg;
+import { ClaudeHandler } from './claude-handler.js';
 import { SDKMessage } from '@anthropic-ai/claude-code';
-import { Logger } from './logger';
-import { WorkingDirectoryManager } from './working-directory-manager';
-import { FileHandler, ProcessedFile } from './file-handler';
-import { TodoManager, Todo } from './todo-manager';
-import { McpManager } from './mcp-manager';
-import { PermissionIPC } from './permission-ipc';
-import { config } from './config';
+import { Logger } from './logger.js';
+import { WorkingDirectoryManager } from './working-directory-manager.js';
+import { FileHandler, ProcessedFile } from './file-handler.js';
+import { TodoManager, Todo } from './todo-manager.js';
+import { McpManager } from './mcp-manager.js';
+import { PermissionIPC } from './permission-ipc.js';
+import { config } from './config.js';
+import { HealthServer } from './health-server.js';
+import { PersistenceManager } from './persistence-manager.js';
 
 interface MessageEvent {
   user: string;
@@ -27,7 +30,7 @@ interface MessageEvent {
 }
 
 export class SlackHandler {
-  private app: App;
+  private app: any;
   private claudeHandler: ClaudeHandler;
   private activeControllers: Map<string, AbortController> = new Map();
   private logger = new Logger('SlackHandler');
@@ -39,13 +42,20 @@ export class SlackHandler {
   private todoMessages: Map<string, string> = new Map(); // sessionKey -> messageTs
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
+  private activeStatusTimers: Map<string, NodeJS.Timeout> = new Map(); // sessionKey -> timer
+  private statusStartTimes: Map<string, Date> = new Map(); // sessionKey -> start time
+  private statusMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> status message info
   private botUserId: string | null = null;
+  private healthServer: HealthServer | null = null;
+  private persistenceManager: PersistenceManager;
 
-  constructor(app: App, claudeHandler: ClaudeHandler, mcpManager: McpManager) {
+  constructor(app: any, claudeHandler: ClaudeHandler, mcpManager: McpManager, persistenceManager: PersistenceManager, healthServer?: HealthServer) {
     this.app = app;
     this.claudeHandler = claudeHandler;
     this.mcpManager = mcpManager;
-    this.workingDirManager = new WorkingDirectoryManager();
+    this.persistenceManager = persistenceManager;
+    this.healthServer = healthServer || null;
+    this.workingDirManager = new WorkingDirectoryManager(persistenceManager);
     this.fileHandler = new FileHandler();
     this.todoManager = new TodoManager();
     this.permissionIPC = new PermissionIPC();
@@ -204,6 +214,11 @@ export class SlackHandler {
 
     const abortController = new AbortController();
     this.activeControllers.set(sessionKey, abortController);
+    
+    // Update active sessions count in health server
+    if (this.healthServer) {
+      this.healthServer.updateActiveSessionsCount(this.activeControllers.size);
+    }
 
     let session = this.claudeHandler.getSession(user, channel, thread_ts || ts);
     if (!session) {
@@ -236,8 +251,11 @@ export class SlackHandler {
       });
       statusMessageTs = statusResult.ts;
 
-      // Add thinking reaction to original message (but don't spam if already set)
-      await this.updateMessageReaction(sessionKey, '🤔');
+      // Add thinking reaction to original message and start status timer
+      await this.updateMessageReaction(sessionKey, '🤔', {
+        channel,
+        statusMessageTs: statusMessageTs!
+      });
       
       // Create Slack context for permission prompts
       const slackContext = {
@@ -246,20 +264,55 @@ export class SlackHandler {
         user
       };
       
-      for await (const message of this.claudeHandler.streamQuery(finalPrompt, session, abortController, workingDirectory, slackContext)) {
-        if (abortController.signal.aborted) break;
-
-        this.logger.debug('Received message from Claude SDK', {
-          type: message.type,
-          subtype: (message as any).subtype,
-          message: message,
+      this.logger.info('🔄 STARTING for await loop on Claude stream generator');
+      let streamMessageCount = 0;
+      const streamStartTime = Date.now();
+      let lastStreamMessage = streamStartTime;
+      
+      // Heartbeat for stream consumption
+      const consumptionHeartbeat = setInterval(() => {
+        const elapsed = Date.now() - streamStartTime;
+        const timeSinceLastMessage = Date.now() - lastStreamMessage;
+        this.logger.info('💓 STREAM CONSUMPTION HEARTBEAT', {
+          sessionKey,
+          elapsedMs: elapsed,
+          elapsedSec: Math.round(elapsed / 1000),
+          timeSinceLastMessageMs: timeSinceLastMessage,
+          timeSinceLastMessageSec: Math.round(timeSinceLastMessage / 1000),
+          messagesReceived: streamMessageCount,
+          abortSignalAborted: abortController.signal.aborted
         });
-
-        if (message.type === 'assistant') {
-          // Check if this is a tool use message
-          const hasToolUse = message.message.content?.some((part: any) => part.type === 'tool_use');
+      }, 7000); // Every 7 seconds (different from Claude handler to distinguish)
+      
+      try {
+        for await (const message of this.claudeHandler.streamQuery(finalPrompt, session, abortController, workingDirectory, slackContext)) {
+          const messageReceiveTime = Date.now();
+          streamMessageCount++;
+          lastStreamMessage = messageReceiveTime;
           
-          if (hasToolUse) {
+          this.logger.info(`📨 RECEIVED STREAM MESSAGE ${streamMessageCount}`, {
+            type: message.type,
+            subtype: (message as any).subtype,
+            sessionKey,
+            elapsedSinceStreamStart: messageReceiveTime - streamStartTime,
+            abortSignalAborted: abortController.signal.aborted,
+            messageHasContent: !!(message as any).message?.content,
+            contentLength: (message as any).message?.content?.length || 0
+          });
+          
+          if (abortController.signal.aborted) {
+            this.logger.warn('🛑 ABORT SIGNAL DETECTED in stream consumption - breaking');
+            break;
+          }
+
+          if (message.type === 'assistant') {
+            this.logger.debug(`🤖 Processing ASSISTANT message ${streamMessageCount}`);
+            
+            // Check if this is a tool use message
+            const hasToolUse = message.message.content?.some((part: any) => part.type === 'tool_use');
+            
+            if (hasToolUse) {
+              this.logger.debug(`🔧 TOOL USE detected in message ${streamMessageCount}`);
             // Update status to show working
             if (statusMessageTs) {
               await this.app.client.chat.update({
@@ -281,57 +334,92 @@ export class SlackHandler {
               await this.handleTodoUpdate(todoTool.input, sessionKey, session?.sessionId, channel, thread_ts || ts, say);
             }
 
-            // For other tool use messages, format them immediately as new messages
-            const toolContent = this.formatToolUse(message.message.content);
-            if (toolContent) { // Only send if there's content (TodoWrite returns empty string)
-              await say({
-                text: toolContent,
-                thread_ts: thread_ts || ts,
-              });
+              // For other tool use messages, format them immediately as new messages
+              const toolContent = this.formatToolUse(message.message.content);
+              if (toolContent) { // Only send if there's content (TodoWrite returns empty string)
+                this.logger.debug(`📤 SENDING tool use content to Slack`);
+                await say({
+                  text: toolContent,
+                  thread_ts: thread_ts || ts,
+                });
+                this.logger.debug(`✅ Tool use content sent to Slack successfully`);
+              }
+            } else {
+              this.logger.debug(`📝 Processing TEXT content in message ${streamMessageCount}`);
+              
+              // Handle regular text content
+              const content = this.extractTextContent(message);
+              if (content) {
+                this.logger.debug(`📝 Extracted text content`, {
+                  contentLength: content.length,
+                  contentPreview: content.substring(0, 100) + (content.length > 100 ? '...' : '')
+                });
+                
+                currentMessages.push(content);
+                
+                // Send each new piece of content as a separate message
+                const formatted = this.formatMessage(content, false);
+                this.logger.debug(`📤 SENDING text content to Slack`);
+                await say({
+                  text: formatted,
+                  thread_ts: thread_ts || ts,
+                });
+                this.logger.debug(`✅ Text content sent to Slack successfully`);
+              } else {
+                this.logger.debug(`ℹ️ No extractable text content in message ${streamMessageCount}`);
+              }
+            }
+          } else if (message.type === 'result') {
+            this.logger.info(`🏁 RECEIVED FINAL RESULT message ${streamMessageCount}`, {
+              subtype: message.subtype,
+              hasResult: message.subtype === 'success' && !!(message as any).result,
+              totalCost: (message as any).total_cost_usd,
+              duration: (message as any).duration_ms,
+            });
+            
+            if (message.subtype === 'success' && (message as any).result) {
+              const finalResult = (message as any).result;
+              if (finalResult && !currentMessages.includes(finalResult)) {
+                this.logger.debug(`📤 SENDING final result to Slack`);
+                const formatted = this.formatMessage(finalResult, true);
+                await say({
+                  text: formatted,
+                  thread_ts: thread_ts || ts,
+                });
+                this.logger.debug(`✅ Final result sent to Slack successfully`);
+              } else {
+                this.logger.debug(`ℹ️ Final result already included or empty`);
+              }
             }
           } else {
-            // Handle regular text content
-            const content = this.extractTextContent(message);
-            if (content) {
-              currentMessages.push(content);
-              
-              // Send each new piece of content as a separate message
-              const formatted = this.formatMessage(content, false);
-              await say({
-                text: formatted,
-                thread_ts: thread_ts || ts,
-              });
-            }
-          }
-        } else if (message.type === 'result') {
-          this.logger.info('Received result from Claude SDK', {
-            subtype: message.subtype,
-            hasResult: message.subtype === 'success' && !!(message as any).result,
-            totalCost: (message as any).total_cost_usd,
-            duration: (message as any).duration_ms,
-          });
-          
-          if (message.subtype === 'success' && (message as any).result) {
-            const finalResult = (message as any).result;
-            if (finalResult && !currentMessages.includes(finalResult)) {
-              const formatted = this.formatMessage(finalResult, true);
-              await say({
-                text: formatted,
-                thread_ts: thread_ts || ts,
-              });
-            }
+            this.logger.warn(`❓ UNKNOWN message type received: ${message.type}`);
           }
         }
+        
+        clearInterval(consumptionHeartbeat);
+        const streamEndTime = Date.now();
+        this.logger.info('🏁 COMPLETED for await loop on Claude stream', {
+          sessionKey,
+          totalMessages: streamMessageCount,
+          totalDurationMs: streamEndTime - streamStartTime,
+          totalDurationSec: Math.round((streamEndTime - streamStartTime) / 1000)
+        });
+        
+      } catch (streamError) {
+        clearInterval(consumptionHeartbeat);
+        this.logger.error('❌ ERROR in stream consumption', {
+          error: streamError,
+          sessionKey,
+          messagesProcessed: streamMessageCount,
+          elapsedBeforeError: Date.now() - streamStartTime
+        });
+        throw streamError;
       }
 
-      // Update status to completed
-      if (statusMessageTs) {
-        await this.app.client.chat.update({
-          channel,
-          ts: statusMessageTs,
-          text: '✅ *Task completed*',
-        });
-      }
+      this.logger.info('🏆 STREAM PROCESSING COMPLETE - cleaning up', { sessionKey });
+      
+      // Clear status timer and show final completion time
+      await this.clearStatusTimer(sessionKey, '✅ *Task completed*');
 
       // Update reaction to show completion
       await this.updateMessageReaction(sessionKey, '✅');
@@ -340,6 +428,11 @@ export class SlackHandler {
         sessionKey,
         messageCount: currentMessages.length,
       });
+      
+      // Record successful interaction in health server
+      if (this.healthServer) {
+        this.healthServer.recordSuccessfulInteraction();
+      }
 
       // Clean up temporary files
       if (processedFiles.length > 0) {
@@ -349,14 +442,8 @@ export class SlackHandler {
       if (error.name !== 'AbortError') {
         this.logger.error('Error handling message', error);
         
-        // Update status to error
-        if (statusMessageTs) {
-          await this.app.client.chat.update({
-            channel,
-            ts: statusMessageTs,
-            text: '❌ *Error occurred*',
-          });
-        }
+        // Clear status timer and show final error time
+        await this.clearStatusTimer(sessionKey, '❌ *Error occurred*');
 
         // Update reaction to show error
         await this.updateMessageReaction(sessionKey, '❌');
@@ -368,14 +455,8 @@ export class SlackHandler {
       } else {
         this.logger.debug('Request was aborted', { sessionKey });
         
-        // Update status to cancelled
-        if (statusMessageTs) {
-          await this.app.client.chat.update({
-            channel,
-            ts: statusMessageTs,
-            text: '⏹️ *Cancelled*',
-          });
-        }
+        // Clear status timer and show final cancellation time
+        await this.clearStatusTimer(sessionKey, '⏹️ *Cancelled*');
 
         // Update reaction to show cancellation
         await this.updateMessageReaction(sessionKey, '⏹️');
@@ -387,6 +468,14 @@ export class SlackHandler {
       }
     } finally {
       this.activeControllers.delete(sessionKey);
+      
+      // Ensure status timer is cleaned up (safety measure)
+      await this.clearStatusTimer(sessionKey);
+      
+      // Update active sessions count in health server
+      if (this.healthServer) {
+        this.healthServer.updateActiveSessionsCount(this.activeControllers.size);
+      }
       
       // Clean up todo tracking if session ended
       if (session?.sessionId) {
@@ -488,6 +577,46 @@ export class SlackHandler {
     return str.substring(0, maxLength) + '...';
   }
 
+  private formatElapsedTime(startTime: Date): string {
+    const elapsed = Math.floor((Date.now() - startTime.getTime()) / 1000);
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  }
+
+  private async updateStatusMessage(sessionKey: string, text: string): Promise<void> {
+    const statusInfo = this.statusMessages.get(sessionKey);
+    const startTime = this.statusStartTimes.get(sessionKey);
+    
+    if (statusInfo && startTime) {
+      const elapsed = this.formatElapsedTime(startTime);
+      await this.app.client.chat.update({
+        channel: statusInfo.channel,
+        ts: statusInfo.ts,
+        text: `${text} (${elapsed})`,
+      });
+    }
+  }
+
+  private async clearStatusTimer(sessionKey: string, finalText?: string): Promise<void> {
+    const timer = this.activeStatusTimers.get(sessionKey);
+    const startTime = this.statusStartTimes.get(sessionKey);
+    
+    if (timer) {
+      clearInterval(timer);
+      
+      // Show final elapsed time if requested
+      if (finalText && startTime) {
+        await this.updateStatusMessage(sessionKey, finalText);
+      }
+      
+      // Cleanup all tracking
+      this.activeStatusTimers.delete(sessionKey);
+      this.statusStartTimes.delete(sessionKey);
+      this.statusMessages.delete(sessionKey);
+    }
+  }
+
   private handleTodoWrite(input: any): string {
     // TodoWrite tool doesn't produce visible output - handled separately
     return '';
@@ -583,7 +712,11 @@ export class SlackHandler {
     return emojiMap[emoji] || emoji;
   }
 
-  private async updateMessageReaction(sessionKey: string, emoji: string): Promise<void> {
+  private async updateMessageReaction(
+    sessionKey: string, 
+    emoji: string, 
+    startStatusTimer?: { channel: string; statusMessageTs: string }
+  ): Promise<void> {
     const originalMessage = this.originalMessages.get(sessionKey);
     if (!originalMessage) {
       return;
@@ -638,6 +771,28 @@ export class SlackHandler {
       });
     } catch (error) {
       this.logger.warn('Failed to update message reaction', error);
+    }
+
+    // Start status timer if requested
+    if (startStatusTimer) {
+      // Clear any existing timer for this session
+      await this.clearStatusTimer(sessionKey);
+      
+      // Set up new timer
+      this.statusStartTimes.set(sessionKey, new Date());
+      this.statusMessages.set(sessionKey, {
+        channel: startStatusTimer.channel,
+        ts: startStatusTimer.statusMessageTs
+      });
+      
+      // Start 30-second interval updates
+      const timer = setInterval(async () => {
+        await this.updateStatusMessage(sessionKey, '🤔 *Working...*');
+      }, 30000); // Every 30 seconds
+      
+      this.activeStatusTimers.set(sessionKey, timer);
+      
+      this.logger.debug('Started status timer', { sessionKey });
     }
   }
 

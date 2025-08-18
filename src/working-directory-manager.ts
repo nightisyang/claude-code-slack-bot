@@ -1,12 +1,47 @@
-import { WorkingDirectoryConfig } from './types';
-import { Logger } from './logger';
-import { config } from './config';
+import { WorkingDirectoryConfig } from './types.js';
+import { Logger } from './logger.js';
+import { config } from './config.js';
+import { PersistenceManager, SerializedWorkingDirectoryConfig } from './persistence-manager.js';
 import * as path from 'path';
 import * as fs from 'fs';
 
 export class WorkingDirectoryManager {
   private configs: Map<string, WorkingDirectoryConfig> = new Map();
   private logger = new Logger('WorkingDirectoryManager');
+  private persistenceManager: PersistenceManager;
+
+  constructor(persistenceManager: PersistenceManager) {
+    this.persistenceManager = persistenceManager;
+    this.loadPersistedConfigs();
+  }
+
+  private loadPersistedConfigs(): void {
+    const state = this.persistenceManager.loadState();
+    if (state?.workingDirectories) {
+      for (const [key, config] of Object.entries(state.workingDirectories)) {
+        this.configs.set(key, {
+          ...config,
+          setAt: new Date(config.setAt)
+        });
+      }
+      this.logger.info('Loaded persisted working directories', { 
+        count: Object.keys(state.workingDirectories).length 
+      });
+    }
+  }
+
+  private saveConfigState(key: string, config: WorkingDirectoryConfig): void {
+    const serialized: SerializedWorkingDirectoryConfig = {
+      channelId: config.channelId,
+      directory: config.directory,
+      threadTs: config.threadTs,
+      userId: config.userId,
+      setAt: config.setAt.toISOString()
+    };
+    this.persistenceManager.scheduleAutoSave({
+      workingDirectories: { [key]: serialized }
+    });
+  }
 
   getConfigKey(channelId: string, threadTs?: string, userId?: string): string {
     if (threadTs) {
@@ -46,6 +81,7 @@ export class WorkingDirectoryManager {
       };
 
       this.configs.set(key, workingDirConfig);
+      this.saveConfigState(key, workingDirConfig);
       this.logger.info('Working directory set', {
         key,
         directory: resolvedPath,
@@ -102,6 +138,10 @@ export class WorkingDirectoryManager {
       const threadKey = this.getConfigKey(channelId, threadTs);
       const threadConfig = this.configs.get(threadKey);
       if (threadConfig) {
+        // Update last used timestamp
+        threadConfig.setAt = new Date();
+        this.saveConfigState(threadKey, threadConfig);
+        
         this.logger.debug('Using thread-specific working directory', {
           directory: threadConfig.directory,
           threadTs,
@@ -114,6 +154,10 @@ export class WorkingDirectoryManager {
     const channelKey = this.getConfigKey(channelId, undefined, userId);
     const channelConfig = this.configs.get(channelKey);
     if (channelConfig) {
+      // Update last used timestamp
+      channelConfig.setAt = new Date();
+      this.saveConfigState(channelKey, channelConfig);
+      
       this.logger.debug('Using channel/DM working directory', {
         directory: channelConfig.directory,
         channelId,

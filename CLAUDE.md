@@ -1,10 +1,10 @@
 # Claude Code Slack Bot
 
-This is a TypeScript-based Slack bot that integrates with the Claude Code SDK to provide AI-powered coding assistance directly within Slack workspaces.
+This is a TypeScript-based Slack bot that integrates with the Claude Code AI SDK to provide AI-powered coding assistance directly within Slack workspaces. The bot now features comprehensive persistence, health monitoring, and production-ready deployment capabilities.
 
 ## Project Overview
 
-The bot allows users to interact with Claude Code through Slack, providing real-time coding assistance, file analysis, code reviews, and project management capabilities. It supports both direct messages and channel conversations, with sophisticated working directory management and task tracking.
+The bot allows users to interact with Claude Code through Slack, providing real-time coding assistance, file analysis, code reviews, and project management capabilities. It supports both direct messages and channel conversations, with sophisticated working directory management, task tracking, persistent sessions, and health monitoring.
 
 ## Architecture
 
@@ -13,11 +13,13 @@ The bot allows users to interact with Claude Code through Slack, providing real-
 - **`src/index.ts`** - Application entry point and initialization
 - **`src/config.ts`** - Environment configuration and validation
 - **`src/slack-handler.ts`** - Main Slack event handling and message processing
-- **`src/claude-handler.ts`** - Claude Code SDK integration and session management
+- **`src/claude-handler.ts`** - Claude Code AI SDK integration with persistence and session management
 - **`src/working-directory-manager.ts`** - Working directory configuration and resolution
 - **`src/file-handler.ts`** - File upload processing and content embedding
 - **`src/todo-manager.ts`** - Task list management and progress tracking
 - **`src/mcp-manager.ts`** - MCP server configuration and management
+- **`src/persistence-manager.ts`** - State persistence and backup management
+- **`src/health-server.ts`** - Health monitoring and status endpoints
 - **`src/logger.ts`** - Structured logging utility
 - **`src/types.ts`** - TypeScript type definitions
 
@@ -57,7 +59,21 @@ The bot allows users to interact with Claude Code through Slack, providing real-
 - **Thread Support**: Maintains context within threaded conversations
 - **File Uploads**: Handles file uploads in any conversation context
 
-#### 6. MCP (Model Context Protocol) Integration
+#### 6. Session Persistence & Recovery
+- **Persistent Sessions**: Conversations survive bot restarts and server reboots
+- **Automatic State Saving**: Debounced writes to disk with backup system
+- **Session Resumption**: Seamless continuation of conversations after interruptions
+- **Data Integrity**: Backup files and error recovery for state corruption
+- **Memory Management**: Efficient session cleanup and garbage collection
+
+#### 7. Health Monitoring & Production Features
+- **Health Endpoints**: HTTP monitoring endpoints for uptime tracking
+- **Process Management**: Custom process management with PID tracking and automatic restarts
+- **Startup Scripts**: Automated deployment with health checks and cron job scheduling
+- **Status Monitoring**: Real-time bot status and metric tracking
+- **Graceful Shutdown**: Clean termination with state preservation
+
+#### 8. MCP (Model Context Protocol) Integration
 - **External Tools**: Extends Claude's capabilities with external MCP servers
 - **Multiple Server Types**: Supports stdio, SSE, and HTTP MCP servers
 - **Auto-Configuration**: Loads servers from `mcp-servers.json` automatically
@@ -74,14 +90,17 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token  
 SLACK_SIGNING_SECRET=your-signing-secret
 
-# Claude Code Configuration
-ANTHROPIC_API_KEY=your-anthropic-api-key
+# Claude Code Configuration  
+# Authentication handled via 'claude setup-token' - no API key needed
 ```
 
 ### Optional Variables
 ```env
 # Working Directory Configuration
 BASE_DIRECTORY=/Users/username/Code/
+
+# Health Server Configuration
+HEALTH_PORT=3001
 
 # Third-party API Providers
 CLAUDE_CODE_USE_BEDROCK=1
@@ -170,12 +189,28 @@ Bot: [Uses mcp__filesystem tools to search files]
 
 ## Development
 
+### Authentication Setup
+```bash
+# First, authenticate with Claude Code (one-time setup)
+claude setup-token
+
+# This replaces the need for ANTHROPIC_API_KEY in environment variables
+```
+
 ### Build and Run
 ```bash
 npm install
 npm run build
-npm run dev     # Development with hot reload
-npm run prod    # Production mode
+
+# Development
+npm run dev           # Development with hot reload
+
+# Production
+npm run start         # Production with custom process management
+npm run prod          # Direct production mode
+npm run restart       # Restart with health checks
+npm run stop          # Graceful shutdown
+npm run status        # Check bot health status
 ```
 
 ### Project Structure
@@ -184,47 +219,107 @@ src/
 ├── index.ts                      # Entry point
 ├── config.ts                     # Configuration
 ├── slack-handler.ts              # Slack event handling
-├── claude-handler.ts             # Claude Code SDK integration
+├── claude-handler.ts             # AI SDK integration with persistence
 ├── working-directory-manager.ts  # Directory management
 ├── file-handler.ts               # File processing
 ├── todo-manager.ts               # Task tracking
 ├── mcp-manager.ts                # MCP server management
+├── persistence-manager.ts        # State persistence & backups
+├── health-server.ts              # Health monitoring endpoints
 ├── logger.ts                     # Logging utility
 └── types.ts                      # Type definitions
 
-# Configuration files
+# Production & Configuration
+scripts/
+├── startup.sh                    # Production startup script
+├── shutdown.sh                   # Graceful shutdown script
+└── health-check.sh               # Health monitoring script
+
+ecosystem.config.js               # Process configuration (not PM2)
 mcp-servers.json                  # MCP server configuration
 mcp-servers.example.json          # Example MCP configuration
+
+# Runtime files (created automatically)
+bot-state.json                    # Persistent state storage
+bot-state.json.backup            # Backup state file
+.bot.pid                         # Process ID tracking
 ```
 
 ### Key Design Decisions
 
 1. **Append-Only Messages**: Instead of editing a single message, each response is a separate message for better conversation flow
-2. **Session-Based Context**: Each conversation maintains its own Claude Code session for continuity
-3. **Smart File Handling**: Text content embedded in prompts, images passed as file paths for Claude to read
-4. **Hierarchical Working Directories**: Channel defaults with thread overrides for flexibility
-5. **Real-Time Feedback**: Status reactions and live task updates for transparency
+2. **AI SDK Integration**: Uses modern AI SDK with claude-code provider instead of legacy Claude Code SDK
+3. **Persistent Session Context**: Each conversation maintains its own session that survives restarts
+4. **Smart File Handling**: Text content embedded in prompts, images passed as file paths for Claude to read
+5. **Hierarchical Working Directories**: Channel defaults with thread overrides for flexibility
+6. **Real-Time Feedback**: Status reactions and live task updates for transparency
+7. **Production-Ready Architecture**: Health monitoring, process management, and automated deployment
 
-### Error Handling
+### Error Handling & Monitoring
 - Graceful degradation when Slack API calls fail
 - Automatic retry for transient errors
-- Comprehensive logging for debugging
-- User-friendly error messages
+- Comprehensive logging with structured output
+- User-friendly error messages with recovery suggestions
 - Automatic cleanup of temporary files
+- Health endpoint monitoring for uptime tracking
+- Process crash recovery with custom health monitoring and cron jobs
+- State corruption detection and backup restoration
 
 ### Security Considerations
-- Environment variables for sensitive configuration
+- Token-based authentication via `claude setup-token`
+- Environment variables for sensitive Slack configuration
 - Secure file download with proper authentication
 - Temporary file cleanup after processing
-- No storage of user data beyond session duration
+- Persistent state stored locally (not in external databases)
 - Validation of file types and sizes
+- Process isolation and permission management
+
+## Production Deployment
+
+### Health Monitoring
+```bash
+# Check bot status
+curl http://localhost:3001/status
+
+# View detailed health information
+curl http://localhost:3001/health
+
+# Monitor process with custom scripts
+./scripts/health-check.sh
+tail -f logs/bot.log
+curl http://localhost:3001/health
+```
+
+### Process Management
+```bash
+# Start in production mode
+npm run start
+
+# Stop gracefully
+npm run stop
+
+# Restart with health checks
+npm run restart
+
+# Remove from startup (stops auto-restart)
+npm run stop:all
+```
 
 ## Future Enhancements
 
-Potential areas for expansion:
-- Persistent working directory storage (database)
+### Completed Features ✅
+- ✅ Persistent working directory storage
+- ✅ Session persistence across restarts
+- ✅ Health monitoring and process management
+- ✅ Production deployment automation
+- ✅ Comprehensive error handling and recovery
+
+### Potential Future Expansions
 - Advanced file format support (PDFs, Office docs)
-- Integration with version control systems
-- Custom slash commands
-- Team-specific bot configurations
-- Analytics and usage tracking
+- Integration with version control systems (GitHub, GitLab)
+- Custom slash commands for Slack
+- Team-specific bot configurations and permissions
+- Analytics and usage tracking dashboard
+- Multi-workspace support with isolated configurations
+- Database-backed persistence for enterprise deployments
+- Optional PM2 integration for enterprise deployments (currently uses custom process management)
