@@ -67,7 +67,7 @@ export class SlackHandler {
     // Process any attached files
     let processedFiles: ProcessedFile[] = [];
     if (files && files.length > 0) {
-      this.logger.info('Processing uploaded files', { count: files.length });
+      this.logger.debug('Processing uploaded files', { count: files.length });
       processedFiles = await this.fileHandler.downloadAndProcessFiles(files);
       
       if (processedFiles.length > 0) {
@@ -237,12 +237,7 @@ export class SlackHandler {
         ? await this.fileHandler.formatFilePrompt(processedFiles, text || '')
         : text || '';
 
-      this.logger.info('Sending query to Claude Code SDK', { 
-        prompt: finalPrompt.substring(0, 200) + (finalPrompt.length > 200 ? '...' : ''), 
-        sessionId: session.sessionId,
-        workingDirectory,
-        fileCount: processedFiles.length,
-      });
+      this.logger.debug('Sending query to Claude', { sessionId: session.sessionId });
 
       // Send initial status message
       const statusResult = await say({
@@ -264,7 +259,7 @@ export class SlackHandler {
         user
       };
       
-      this.logger.info('🔄 STARTING for await loop on Claude stream generator');
+      this.logger.debug('Starting stream processing');
       let streamMessageCount = 0;
       const streamStartTime = Date.now();
       let lastStreamMessage = streamStartTime;
@@ -273,15 +268,7 @@ export class SlackHandler {
       const consumptionHeartbeat = setInterval(() => {
         const elapsed = Date.now() - streamStartTime;
         const timeSinceLastMessage = Date.now() - lastStreamMessage;
-        this.logger.info('💓 STREAM CONSUMPTION HEARTBEAT', {
-          sessionKey,
-          elapsedMs: elapsed,
-          elapsedSec: Math.round(elapsed / 1000),
-          timeSinceLastMessageMs: timeSinceLastMessage,
-          timeSinceLastMessageSec: Math.round(timeSinceLastMessage / 1000),
-          messagesReceived: streamMessageCount,
-          abortSignalAborted: abortController.signal.aborted
-        });
+        this.logger.debug('Stream heartbeat', { messages: streamMessageCount, elapsed: Math.round(elapsed / 1000) });
       }, 7000); // Every 7 seconds (different from Claude handler to distinguish)
       
       try {
@@ -290,15 +277,7 @@ export class SlackHandler {
           streamMessageCount++;
           lastStreamMessage = messageReceiveTime;
           
-          this.logger.info(`📨 RECEIVED STREAM MESSAGE ${streamMessageCount}`, {
-            type: message.type,
-            subtype: (message as any).subtype,
-            sessionKey,
-            elapsedSinceStreamStart: messageReceiveTime - streamStartTime,
-            abortSignalAborted: abortController.signal.aborted,
-            messageHasContent: !!(message as any).message?.content,
-            contentLength: (message as any).message?.content?.length || 0
-          });
+          this.logger.debug(`Received stream message ${streamMessageCount}`, { type: message.type });
           
           if (abortController.signal.aborted) {
             this.logger.warn('🛑 ABORT SIGNAL DETECTED in stream consumption - breaking');
@@ -370,12 +349,7 @@ export class SlackHandler {
               }
             }
           } else if (message.type === 'result') {
-            this.logger.info(`🏁 RECEIVED FINAL RESULT message ${streamMessageCount}`, {
-              subtype: message.subtype,
-              hasResult: message.subtype === 'success' && !!(message as any).result,
-              totalCost: (message as any).total_cost_usd,
-              duration: (message as any).duration_ms,
-            });
+            this.logger.debug(`Final result message ${streamMessageCount}`);
             
             if (message.subtype === 'success' && (message as any).result) {
               const finalResult = (message as any).result;
@@ -398,12 +372,7 @@ export class SlackHandler {
         
         clearInterval(consumptionHeartbeat);
         const streamEndTime = Date.now();
-        this.logger.info('🏁 COMPLETED for await loop on Claude stream', {
-          sessionKey,
-          totalMessages: streamMessageCount,
-          totalDurationMs: streamEndTime - streamStartTime,
-          totalDurationSec: Math.round((streamEndTime - streamStartTime) / 1000)
-        });
+        this.logger.debug('Stream processing completed', { messages: streamMessageCount });
         
       } catch (streamError) {
         clearInterval(consumptionHeartbeat);
@@ -416,7 +385,7 @@ export class SlackHandler {
         throw streamError;
       }
 
-      this.logger.info('🏆 STREAM PROCESSING COMPLETE - cleaning up', { sessionKey });
+      this.logger.debug('Cleaning up stream');
       
       // Clear status timer and show final completion time
       await this.clearStatusTimer(sessionKey, '✅ *Task completed*');
@@ -424,10 +393,7 @@ export class SlackHandler {
       // Update reaction to show completion
       await this.updateMessageReaction(sessionKey, '✅');
 
-      this.logger.info('Completed processing message', {
-        sessionKey,
-        messageCount: currentMessages.length,
-      });
+      this.logger.debug('Message processing complete');
       
       // Record successful interaction in health server
       if (this.healthServer) {
