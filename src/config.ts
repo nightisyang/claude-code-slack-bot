@@ -14,7 +14,7 @@ export const config = {
     useVertex: process.env.CLAUDE_CODE_USE_VERTEX === '1',
   },
   baseDirectory: process.env.BASE_DIRECTORY || '',
-  debug: true,
+  debug: process.env.DEBUG === 'true',
 };
 
 export function validateConfig() {

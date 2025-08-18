@@ -90,13 +90,7 @@ export class ClaudeHandler {
     workingDirectory?: string,
     slackContext?: { channel: string; threadTs?: string; user: string }
   ): AsyncGenerator<any, void, unknown> {
-    this.logger.info('🚀 Starting streamQuery', {
-      promptLength: prompt.length,
-      hasSession: !!session,
-      sessionId: session?.sessionId,
-      workingDirectory,
-      hasAbortController: !!abortController
-    });
+    this.logger.debug('Starting stream query', { sessionId: session?.sessionId });
 
     // Configure model options with proper settings
     const modelOptions: any = {
@@ -107,10 +101,7 @@ export class ClaudeHandler {
       ...(workingDirectory && { cwd: workingDirectory }),
     };
 
-    this.logger.info('🔧 Model options prepared', {
-      ...modelOptions,
-      workingDirectorySet: !!workingDirectory
-    });
+    // Model options prepared
 
     // Add MCP server configuration if available
     const mcpServers = this.mcpManager.getServerConfiguration();
@@ -130,14 +121,14 @@ export class ClaudeHandler {
     // RESTORED: Handle session resumption with correct community provider syntax
     let modelToUse;
     if (session?.sessionId) {
-      this.logger.info('🔄 Resuming existing session', { sessionId: session.sessionId });
+      this.logger.debug('Resuming session', { sessionId: session.sessionId });
       modelToUse = claudeCode('sonnet', { resume: session.sessionId, ...modelOptions });
     } else {
-      this.logger.info('🆕 Starting new Claude conversation');
+      this.logger.debug('Starting new conversation');
       modelToUse = claudeCode('sonnet', modelOptions);
     }
 
-    this.logger.info('🎯 About to call streamText...');
+    // Calling streamText...
 
     // Add timeout detection for debugging
     const timeoutId = setTimeout(() => {
@@ -154,17 +145,12 @@ export class ClaudeHandler {
 
       clearTimeout(timeoutId); // Clear timeout since call succeeded
 
-      this.logger.info('✅ streamText call successful, result received');
-      this.logger.info('📊 Result properties:', {
-        hasTextStream: !!result.textStream,
-        hasProviderMetadata: !!result.providerMetadata,
-        hasUsage: !!result.usage
-      });
+      this.logger.debug('streamText call successful');
 
       // MOVED: Metadata extraction now happens AFTER streaming completes
       // This prevents the deadlock where metadata Promise waits for streaming to finish
       // but we're trying to extract it before streaming starts
-      this.logger.info('⏭️ SKIPPING pre-streaming metadata extraction to prevent deadlock');
+      // Metadata extraction deferred to prevent deadlock
       /*
       const metadata = await result.providerMetadata;
       if (session && metadata?.['claude-code']?.sessionId) {
@@ -188,7 +174,7 @@ export class ClaudeHandler {
       }
       */
 
-      this.logger.info('🔄 About to start streaming text chunks...');
+      // Starting text stream...
 
       let fullResponse = '';
       let chunkCount = 0;
@@ -199,17 +185,7 @@ export class ClaudeHandler {
       const heartbeatInterval = setInterval(() => {
         const elapsed = Date.now() - streamStartTime;
         const timeSinceLastChunk = Date.now() - lastChunkTime;
-        this.logger.info('💓 ❗ STREAMING HEARTBEAT ❗', {
-          sessionId: session?.sessionId,
-          elapsedMs: elapsed,
-          elapsedSec: Math.round(elapsed / 1000),
-          timeSinceLastChunkMs: timeSinceLastChunk,
-          timeSinceLastChunkSec: Math.round(timeSinceLastChunk / 1000),
-          chunksReceived: chunkCount,
-          totalLength: fullResponse.length,
-          abortSignalAborted: abortController?.signal.aborted || false,
-          streamIsActive: true
-        });
+        this.logger.debug('Stream heartbeat', { chunks: chunkCount, elapsed: Math.round(elapsed / 1000) });
         
         // Extra loud if no chunks received for a while
         if (timeSinceLastChunk > 10000) {
@@ -219,7 +195,7 @@ export class ClaudeHandler {
       
       // Stream text chunks in compatible format with MAXIMUM debugging
       try {
-        this.logger.info('🎯 ❗ ENTERING for await loop for textStream ❗');
+        // Processing text stream...
         
         for await (const chunk of result.textStream) {
           const chunkReceiveTime = Date.now();
@@ -229,16 +205,7 @@ export class ClaudeHandler {
           
           fullResponse += chunk;
           
-          this.logger.info(`📝 🔊 CHUNK ${chunkCount} RECEIVED 🔊`, {
-            chunkLength: chunk.length,
-            totalLength: fullResponse.length,
-            chunkPreview: chunk.substring(0, 150) + (chunk.length > 150 ? '...' : ''),
-            elapsedSinceStreamStart: chunkReceiveTime - streamStartTime,
-            timeSinceLastChunk: chunkCount > 1 ? chunkReceiveTime - lastChunkTime : 0,
-            abortSignalAborted: abortController?.signal.aborted || false,
-            sessionId: session?.sessionId,
-            chunkNumber: chunkCount
-          });
+          this.logger.debug(`Chunk ${chunkCount} received`, { length: chunk.length });
           
           // Check abort signal before yielding - VERBOSE
           if (abortController?.signal.aborted) {
@@ -263,19 +230,10 @@ export class ClaudeHandler {
         }
         
         clearInterval(heartbeatInterval);
-        this.logger.info('🏁 ❗ EXITED for await loop - streaming iterator completed ❗');
+        // Stream iteration complete
         
         const streamEndTime = Date.now();
-        this.logger.info('✅ 🔊 STREAMING COMPLETED 🔊', {
-          totalChunks: chunkCount,
-          totalLength: fullResponse.length,
-          totalDurationMs: streamEndTime - streamStartTime,
-          totalDurationSec: Math.round((streamEndTime - streamStartTime) / 1000),
-          averageChunkSize: chunkCount > 0 ? Math.round(fullResponse.length / chunkCount) : 0,
-          averageTimeBetweenChunks: chunkCount > 1 ? Math.round((streamEndTime - streamStartTime) / chunkCount) : 0,
-          finalAbortState: abortController?.signal.aborted || false,
-          sessionId: session?.sessionId
-        });
+        this.logger.debug('Streaming completed', { chunks: chunkCount, duration: Math.round((streamEndTime - streamStartTime) / 1000) });
       } catch (streamError) {
         clearInterval(heartbeatInterval);
         this.logger.error('❌ 🔊 ERROR DURING STREAMING 🔊', {
@@ -316,17 +274,7 @@ export class ClaudeHandler {
         finalUsage = usage;
         finalProviderMetadata = providerMetadata;
         
-        this.logger.info('🔍 ✅ FINAL METADATA RESOLVED!', {
-          extractionTimeMs: finalMetadataTime,
-          hasUsage: !!usage,
-          hasProviderMetadata: !!providerMetadata,
-          usageKeys: usage ? Object.keys(usage) : [],
-          providerMetadataKeys: providerMetadata ? Object.keys(providerMetadata) : [],
-          hasClaudeCode: !!providerMetadata?.['claude-code'],
-          sessionId: providerMetadata?.['claude-code']?.sessionId,
-          costUsd: providerMetadata?.['claude-code']?.costUsd,
-          durationMs: providerMetadata?.['claude-code']?.durationMs
-        });
+        this.logger.debug('Final metadata resolved');
 
         // Update session with captured session ID for NEXT conversation
         if (session && providerMetadata?.['claude-code']?.sessionId) {
