@@ -36,3 +36,14 @@ yarn-error.log*
 # Testing
 coverage/
 .nyc_output/
+
+# Runtime files
+.bot.pid
+bot-state.json
+bot-state.json.backup
+
+# Deployment files (examples are tracked)
+deploy/claude-bot-logrotate
+deploy/claude-slack-bot.service
+deploy/cloudflared-config.yml
+deploy/nginx-bot.conf

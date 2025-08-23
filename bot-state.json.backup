@@ -1,26 +1,31 @@
 {
   "version": "1.0.0",
-  "lastUpdated": "2025-08-16T05:35:28.239Z",
+  "lastUpdated": "2025-08-23T10:23:44.926Z",
   "workingDirectories": {
-    "C09A450SH3K": {
-      "channelId": "C09A450SH3K",
-      "directory": "/Users/syoung/palm-advisory-services",
-      "setAt": "2025-08-14T12:20:26.467Z"
-    },
     "C099YJDM39C": {
       "channelId": "C099YJDM39C",
-      "directory": "/Users/syoung/claude-code-slack-bot",
-      "setAt": "2025-08-16T05:29:00.824Z"
+      "directory": "/home/pihome/claude-code-slack-bot",
+      "setAt": "2025-08-23T10:23:23.694Z"
+    },
+    "C09A450SH3K": {
+      "channelId": "C09A450SH3K",
+      "directory": "/home/pihome",
+      "setAt": "2025-08-23T09:13:43.974Z"
+    },
+    "C09BS5S3162": {
+      "channelId": "C09BS5S3162",
+      "directory": "/home/pihome/claude-code-slack-bot",
+      "setAt": "2025-08-23T09:20:36.326Z"
     }
   },
   "sessions": {
-    "U09A450N22D-C099YJDM39C-1755312060.447019": {
+    "U09A450N22D-C099YJDM39C-1755941077.826069": {
       "userId": "U09A450N22D",
       "channelId": "C099YJDM39C",
-      "threadTs": "1755312060.447019",
-      "sessionId": "2bd9a6ef-7579-49e9-bde7-ff2e13cf0931",
+      "threadTs": "1755941077.826069",
+      "sessionId": "5328ba65-885c-408f-9557-049ccb11b043",
       "isActive": true,
-      "lastActivity": "2025-08-16T05:21:44.487Z"
+      "lastActivity": "2025-08-23T10:06:37.458Z"
     }
   }
 }

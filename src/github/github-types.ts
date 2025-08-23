@@ -201,4 +201,5 @@ export interface GitHubServiceConfig {
   reviewLevel: 'basic' | 'comprehensive' | 'security-focused';
   enabledEvents: string[];
   issueResponse: IssueResponseConfig;
+  authorWhitelist: string[];
 }

@@ -1,0 +1,13 @@
+tunnel: 193d9d8a-ad23-4bac-8142-e345279f983c
+credentials-file: /etc/cloudflared/193d9d8a-ad23-4bac-8142-e345279f983c.json
+
+ingress:
+  - hostname: bot.thisyoung.rocks
+    service: http://localhost:80  # Nginx will handle routing
+  - hostname: cari-tempat.thisyoung.rocks
+    service: http://localhost:8888
+  - hostname: thisyoung.rocks
+    service: http://localhost:80
+  - hostname: chinup.rocks
+    service: http://localhost:80
+  - service: http_status:404

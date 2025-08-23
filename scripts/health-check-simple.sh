@@ -2,7 +2,7 @@
 
 # Simple health check script - restart if bot is stuck
 HEALTH_URL="http://localhost:3001/health"
-BOT_DIR="/Users/syoung/claude-code-slack-bot"
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="$BOT_DIR/logs/health-check.log"
 
 # Create logs directory if it doesn't exist

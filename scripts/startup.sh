@@ -6,7 +6,7 @@
 # 2. Starts the bot
 # 3. Ensures only one instance is running
 
-BOT_DIR="/Users/syoung/claude-code-slack-bot"
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HEALTH_CHECK_SCRIPT="$BOT_DIR/scripts/health-check-simple.sh"
 LOG_FILE="$BOT_DIR/logs/startup.log"
 PID_FILE="$BOT_DIR/.bot.pid"

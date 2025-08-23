@@ -6,10 +6,13 @@
 # 2. Optionally removes the cron job
 # 3. Cleans up PID files
 
-BOT_DIR="/Users/syoung/claude-code-slack-bot"
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="$BOT_DIR/.bot.pid"
 LOG_FILE="$BOT_DIR/logs/shutdown.log"
 CRON_IDENTIFIER="# CLAUDE_BOT_HEALTH_CHECK"
+
+# Create logs directory if it doesn't exist
+mkdir -p "$BOT_DIR/logs"
 
 # Parse arguments
 REMOVE_CRON=false

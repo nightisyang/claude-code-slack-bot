@@ -1,0 +1,18 @@
+[Unit]
+Description=Claude Code Slack Bot with GitHub Integration
+After=network.target
+
+[Service]
+Type=simple
+User=pihome
+WorkingDirectory=/home/pihome/claude-code-slack-bot
+Environment="NODE_ENV=production"
+EnvironmentFile=/home/pihome/claude-code-slack-bot/.env
+ExecStart=/usr/bin/npm run prod
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/claude-bot/bot.log
+StandardError=append:/var/log/claude-bot/error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -58,6 +58,24 @@ export class GitHubWebhookHandler {
       sender: payload.sender?.login,
     });
 
+    // Check author whitelist if configured
+    if (githubConfig.authorWhitelist.length > 0) {
+      const author = payload.sender?.login;
+      if (author && !githubConfig.authorWhitelist.includes(author)) {
+        this.logger.info('Skipping event from non-whitelisted author', {
+          eventId: event.id,
+          eventType,
+          author,
+          whitelist: githubConfig.authorWhitelist,
+        });
+        return {
+          success: true,
+          event,
+          actions_taken: [`Skipped - author '${author}' not in whitelist`],
+        };
+      }
+    }
+
     try {
       let result: WebhookProcessingResult;
 
@@ -136,6 +154,20 @@ export class GitHubWebhookHandler {
       draft: pr.draft,
       merged: pr.merged,
     });
+
+    // Check if PR author is whitelisted for automated reviews
+    if (githubConfig.authorWhitelist.length > 0 && !githubConfig.authorWhitelist.includes(pr.user.login)) {
+      this.logger.info('Skipping PR from non-whitelisted author', {
+        prNumber: pr.number,
+        author: pr.user.login,
+      });
+      actions.push(`Skipped PR from non-whitelisted author: ${pr.user.login}`);
+      return {
+        success: true,
+        event,
+        actions_taken: actions,
+      };
+    }
 
     switch (action) {
       case 'opened':
@@ -279,6 +311,20 @@ export class GitHubWebhookHandler {
       isPullRequest: !!issue.pull_request,
       issueResponseEnabled: githubConfig.issueResponse.enabled,
     });
+
+    // Additional author check for issue comments
+    if (githubConfig.authorWhitelist.length > 0 && !githubConfig.authorWhitelist.includes(comment.user.login)) {
+      this.logger.info('Skipping issue comment from non-whitelisted author', {
+        issueNumber: issue.number,
+        author: comment.user.login,
+      });
+      actions.push(`Skipped issue comment from non-whitelisted author: ${comment.user.login}`);
+      return {
+        success: true,
+        event,
+        actions_taken: actions,
+      };
+    }
 
     // Handle different comment actions
     if (action === 'created') {

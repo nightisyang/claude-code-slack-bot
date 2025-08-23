@@ -33,7 +33,8 @@ if [ "$http_code" = "200" ]; then
         send_slack_alert "Bot is running but reporting unhealthy status"
         
         # Try to restart the bot
-        cd /Users/syoung/claude-code-slack-bot
+        BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        cd "$BOT_DIR"
         npm run restart 2>&1 >> "$LOG_FILE"
     fi
 else
@@ -42,7 +43,8 @@ else
     
     # Attempt restart
     echo "[$timestamp] Attempting restart..." >> "$LOG_FILE"
-    cd /Users/syoung/claude-code-slack-bot
+    BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    cd "$BOT_DIR"
     npm run restart 2>&1 >> "$LOG_FILE"
 fi
 

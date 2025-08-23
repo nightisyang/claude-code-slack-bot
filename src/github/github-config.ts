@@ -36,6 +36,8 @@ export const githubConfig: GitHubServiceConfig = {
     includedCommentTypes: (process.env.GITHUB_ISSUE_RESPONSE_INCLUDED_TYPES || 'question_technical,bug_report,feature_request,documentation,support,discussion').split(',').map(t => t.trim()),
     enableWelcomeMessages: process.env.GITHUB_ISSUE_RESPONSE_WELCOME_MESSAGES !== 'false', // Default to true
   },
+  // Security: Author whitelist for responding to issues/PRs (empty = respond to all)
+  authorWhitelist: (process.env.GITHUB_AUTHOR_WHITELIST || 'nightisyang').split(',').map(a => a.trim()).filter(a => a.length > 0),
 };
 
 export function validateGitHubConfig(): void {

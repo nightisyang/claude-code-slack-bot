@@ -1,0 +1,13 @@
+/var/log/claude-bot/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 pihome pihome
+    sharedscripts
+    postrotate
+        systemctl reload claude-slack-bot > /dev/null 2>&1 || true
+    endscript
+}

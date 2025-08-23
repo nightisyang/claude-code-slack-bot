@@ -13,7 +13,7 @@
 crontab -e
 
 # Add health check every 5 minutes
-*/5 * * * * /Users/syoung/claude-code-slack-bot/scripts/health-check.sh
+*/5 * * * * /path/to/your/claude-code-slack-bot/scripts/health-check.sh
 
 # View cron logs
 tail -f /var/log/claude-bot-health.log

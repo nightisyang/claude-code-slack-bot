@@ -18,11 +18,11 @@ This health check system monitors the Claude Code Slack Bot and automatically re
 
 ### 1. Test the Health Check Script
 ```bash
-# Run manually to test
-/Users/syoung/claude-code-slack-bot/scripts/health-check-simple.sh
+# Run manually to test (replace with your actual bot path)
+/path/to/your/claude-code-slack-bot/scripts/health-check-simple.sh
 
 # Check the log
-tail -f /Users/syoung/claude-code-slack-bot/logs/health-check.log
+tail -f /path/to/your/claude-code-slack-bot/logs/health-check.log
 ```
 
 ### 2. Install Cron Job
@@ -30,12 +30,12 @@ tail -f /Users/syoung/claude-code-slack-bot/logs/health-check.log
 # Add to your crontab
 crontab -e
 
-# Add these lines:
+# Add these lines (replace with your actual bot path):
 # Claude Code Slack Bot Health Check
-*/5 * * * * /Users/syoung/claude-code-slack-bot/scripts/health-check-simple.sh
+*/5 * * * * /path/to/your/claude-code-slack-bot/scripts/health-check-simple.sh
 
-# Or use the provided file:
-crontab /Users/syoung/claude-code-slack-bot/scripts/crontab-entry.txt
+# Or use the provided file (edit it first to set correct paths):
+crontab /path/to/your/claude-code-slack-bot/scripts/crontab-entry.txt
 ```
 
 ### 3. Verify Cron Job
@@ -47,7 +47,7 @@ crontab -l
 sudo launchctl list | grep com.vix.cron
 
 # Monitor health check logs
-tail -f /Users/syoung/claude-code-slack-bot/logs/health-check.log
+tail -f /path/to/your/claude-code-slack-bot/logs/health-check.log
 ```
 
 ## Manual Commands
@@ -66,7 +66,7 @@ curl http://localhost:3001/status | jq '.'
 ```bash
 npm run restart
 # or
-/Users/syoung/claude-code-slack-bot/scripts/health-check-simple.sh
+/path/to/your/claude-code-slack-bot/scripts/health-check-simple.sh
 ```
 
 ### Stop Bot
@@ -90,16 +90,16 @@ sudo launchctl load -w /System/Library/LaunchDaemons/com.vix.cron.plist
 ### Permission Issues
 ```bash
 # Make sure script is executable
-chmod +x /Users/syoung/claude-code-slack-bot/scripts/health-check-simple.sh
+chmod +x /path/to/your/claude-code-slack-bot/scripts/health-check-simple.sh
 
 # Check file permissions
-ls -la /Users/syoung/claude-code-slack-bot/scripts/
+ls -la /path/to/your/claude-code-slack-bot/scripts/
 ```
 
 ### Bot Keeps Restarting
 Check the health check log to see why:
 ```bash
-tail -n 50 /Users/syoung/claude-code-slack-bot/logs/health-check.log
+tail -n 50 /path/to/your/claude-code-slack-bot/logs/health-check.log
 ```
 
 Common causes:
@@ -121,12 +121,12 @@ npm run dev
 
 ### View Recent Health Checks
 ```bash
-grep "Health check" /Users/syoung/claude-code-slack-bot/logs/health-check.log | tail -20
+grep "Health check" /path/to/your/claude-code-slack-bot/logs/health-check.log | tail -20
 ```
 
 ### Count Restarts Today
 ```bash
-grep "$(date '+%Y-%m-%d')" /Users/syoung/claude-code-slack-bot/logs/health-check.log | grep -c "Restarting"
+grep "$(date '+%Y-%m-%d')" /path/to/your/claude-code-slack-bot/logs/health-check.log | grep -c "Restarting"
 ```
 
 ### Watch Live Status
