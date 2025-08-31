@@ -1,31 +1,6 @@
 {
   "version": "1.0.0",
-  "lastUpdated": "2025-08-23T10:24:19.630Z",
-  "workingDirectories": {
-    "C099YJDM39C": {
-      "channelId": "C099YJDM39C",
-      "directory": "/home/pihome/claude-code-slack-bot",
-      "setAt": "2025-08-23T10:24:17.629Z"
-    },
-    "C09A450SH3K": {
-      "channelId": "C09A450SH3K",
-      "directory": "/home/pihome",
-      "setAt": "2025-08-23T09:13:43.974Z"
-    },
-    "C09BS5S3162": {
-      "channelId": "C09BS5S3162",
-      "directory": "/home/pihome/claude-code-slack-bot",
-      "setAt": "2025-08-23T09:20:36.326Z"
-    }
-  },
-  "sessions": {
-    "U09A450N22D-C099YJDM39C-1755941077.826069": {
-      "userId": "U09A450N22D",
-      "channelId": "C099YJDM39C",
-      "threadTs": "1755941077.826069",
-      "sessionId": "5328ba65-885c-408f-9557-049ccb11b043",
-      "isActive": true,
-      "lastActivity": "2025-08-23T10:06:37.458Z"
-    }
-  }
+  "lastUpdated": "",
+  "workingDirectories": {},
+  "sessions": {}
 }

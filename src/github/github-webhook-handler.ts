@@ -4,8 +4,7 @@ import { GitHubApiClient } from './github-api-client.js';
 import { GitHubRepositoryManager, RepositoryInfo } from './github-repository-manager.js';
 import { GitHubSlackNotifier } from './github-slack-notifier.js';
 import { ClaudeHandler } from '../claude-handler.js';
-import { GitHubIssueResponder } from './github-issue-responder.js';
-import { GitHubResponseValidator } from './github-response-validator.js';
+import { GitHubClaudeProcessor } from './github-claude-processor.js';
 import {
   GitHubWebhookPayload,
   GitHubWebhookHeaders,
@@ -22,16 +21,14 @@ export class GitHubWebhookHandler {
   private repositoryManager: GitHubRepositoryManager;
   private slackNotifier: GitHubSlackNotifier;
   private claudeHandler: ClaudeHandler;
-  private issueResponder: GitHubIssueResponder;
-  private responseValidator: GitHubResponseValidator;
+  private claudeProcessor: GitHubClaudeProcessor;
 
   constructor(apiClient: GitHubApiClient, claudeHandler: ClaudeHandler) {
     this.apiClient = apiClient;
     this.claudeHandler = claudeHandler;
     this.repositoryManager = new GitHubRepositoryManager();
     this.slackNotifier = new GitHubSlackNotifier();
-    this.issueResponder = new GitHubIssueResponder(claudeHandler, apiClient);
-    this.responseValidator = new GitHubResponseValidator();
+    this.claudeProcessor = new GitHubClaudeProcessor(claudeHandler, apiClient);
   }
 
   /**
@@ -312,19 +309,6 @@ export class GitHubWebhookHandler {
       issueResponseEnabled: githubConfig.issueResponse.enabled,
     });
 
-    // Additional author check for issue comments
-    if (githubConfig.authorWhitelist.length > 0 && !githubConfig.authorWhitelist.includes(comment.user.login)) {
-      this.logger.info('Skipping issue comment from non-whitelisted author', {
-        issueNumber: issue.number,
-        author: comment.user.login,
-      });
-      actions.push(`Skipped issue comment from non-whitelisted author: ${comment.user.login}`);
-      return {
-        success: true,
-        event,
-        actions_taken: actions,
-      };
-    }
 
     // Handle different comment actions
     if (action === 'created') {
@@ -336,29 +320,47 @@ export class GitHubWebhookHandler {
         // Process automated response for regular issues (not PRs)
         if (githubConfig.issueResponse.enabled && !issue.pull_request) {
           try {
-            const responseResult = await this.issueResponder.processIssueComment(payload);
+            const result = await this.claudeProcessor.processIssueComment(payload);
             
-            if (responseResult.success) {
-              if (responseResult.responsePosted) {
-                actions.push(`Automated response posted with confidence ${responseResult.confidence.toFixed(2)}`);
-                
-                // Send Slack notification about the automated response
-                await this.slackNotifier.notifyIssueResponse(
-                  repository.full_name,
-                  issue.number,
-                  issue.title,
-                  comment.user.login,
-                  issue.html_url,
-                  responseResult.responsePreview,
-                  responseResult.confidence
-                );
-                
-                actions.push('Slack notification sent for automated response');
-              } else {
-                actions.push(`No automated response needed (confidence: ${responseResult.confidence.toFixed(2)})`);
+            if (result.shouldRespond && result.response) {
+              // Post the response to GitHub
+              const [owner, repo] = repository.full_name.split('/');
+              const githubComment = await this.apiClient.createIssueComment(
+                owner,
+                repo,
+                issue.number,
+                result.response
+              );
+              
+              actions.push(`Claude AI response posted (confidence: ${result.confidence?.toFixed(2) || 'N/A'})`);
+              
+              // Send Slack notification about the automated response
+              await this.slackNotifier.notifyIssueResponse(
+                repository.full_name,
+                issue.number,
+                issue.title,
+                comment.user.login,
+                issue.html_url,
+                result.response.substring(0, 200) + (result.response.length > 200 ? '...' : ''),
+                result.confidence || 0
+              );
+              
+              actions.push('Slack notification sent for automated response');
+              
+              // Log explored files if any
+              if (result.exploredFiles && result.exploredFiles.length > 0) {
+                this.logger.info('Claude explored files', {
+                  files: result.exploredFiles,
+                  count: result.exploredFiles.length,
+                });
               }
             } else {
-              actions.push(`Automated response failed: ${responseResult.error}`);
+              actions.push(`Claude AI decided not to respond: ${result.reasoning}`);
+              this.logger.info('Claude skipped response', {
+                reason: result.reasoning,
+                confidence: result.confidence,
+                exploredFiles: result.exploredFiles,
+              });
             }
           } catch (error) {
             this.logger.error('Failed to process automated issue response', {
@@ -366,7 +368,7 @@ export class GitHubWebhookHandler {
               repository: repository.full_name,
               error,
             });
-            actions.push('Automated response processing failed');
+            actions.push('Claude AI processing failed');
           }
         }
       }
